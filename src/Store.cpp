@@ -58,7 +58,6 @@ void Store::run() {
     ui::loadFonts();
     std::vector<ItemRow> items;
     int credits = net_.credits;
-    int selectedWeapon = net_.selectedWeapon;
     std::string toast;
     double toastUntil = 0.0;
     Color toastColor = RED;
@@ -88,7 +87,7 @@ void Store::run() {
                     if (existing.id == r.id) { existing = r; replaced = true; break; }
                 }
                 if (!replaced) items.push_back(std::move(r));
-                if (items.back().selected) selectedWeapon = items.back().id;
+                if (items.back().selected) net_.selectedWeapon = items.back().id;
             } else if (t == proto::kT_StoreEnd) {
                 if (m.size() >= 2) credits = std::atoi(m[1].c_str());
                 net_.credits = credits;
@@ -105,7 +104,6 @@ void Store::run() {
             } else if (t == proto::kT_WeaponOk) {
                 if (m.size() < 2) continue;
                 int wid = std::atoi(m[1].c_str());
-                selectedWeapon = wid;
                 net_.selectedWeapon = wid;
                 for (auto& it : items) it.selected = (it.id == wid);
                 toast = "Loadout updated";

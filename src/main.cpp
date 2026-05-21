@@ -16,7 +16,6 @@
 int main(int , char** ) {
     SetConfigFlags(FLAG_WINDOW_HIGHDPI);
     SetTraceLogLevel(LOG_WARNING);
-    i18n::init();
     NetClient net;
     EmbeddedServer embedded;
     while (true) {

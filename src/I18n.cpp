@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <unordered_map>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -159,10 +160,23 @@ void init() {
     g_inited = true;
 }
 void save() {
-    std::FILE* f = std::fopen(prefsPath().c_str(), "w");
-    if (!f) return;
-    std::fprintf(f, "lang=%s\n", g_lang == Lang::ZH ? "zh" : "en");
-    std::fclose(f);
+    std::unordered_map<std::string, std::string> lines;
+    std::string path = prefsPath();
+    {
+        std::ifstream in(path);
+        std::string line;
+        while (std::getline(in, line)) {
+            auto eq = line.find('=');
+            if (eq == std::string::npos) continue;
+            lines[line.substr(0, eq)] = line.substr(eq + 1);
+        }
+    }
+    lines["lang"] = (g_lang == Lang::ZH ? "zh" : "en");
+    std::ofstream out(path);
+    if (!out.good()) return;
+    for (const auto& kv : lines) {
+        out << kv.first << '=' << kv.second << '\n';
+    }
 }
 Lang current() { init(); return g_lang; }
 void setLanguage(Lang l) {

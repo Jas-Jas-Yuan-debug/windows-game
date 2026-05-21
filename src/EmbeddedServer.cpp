@@ -36,9 +36,13 @@ bool EmbeddedServer::start(std::uint16_t port, int teamSize, const std::string& 
     });
     return true;
 }
+bool EmbeddedServer::isReady() const {
+    return running_.load() && server_ && server_->isReady();
+}
 void EmbeddedServer::stop() {
     if (server_) server_->stop();
     if (thread_.joinable()) thread_.join();
     server_.reset();
     running_.store(false);
+    port_ = 0;
 }

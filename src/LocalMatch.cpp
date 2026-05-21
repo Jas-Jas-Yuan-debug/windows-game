@@ -425,7 +425,9 @@ void LocalMatch::drawHUD() {
         int tw = ui::measureText(buf, 18);
         ui::drawText(buf, (kScreenW - tw) / 2, 44, 18, LIGHTGRAY);
     } else {
-        std::snprintf(buf, sizeof(buf), i18n::tr("solo.hud.dummies"), dummyHits_);
+        char dummyFmt[64];
+        std::snprintf(dummyFmt, sizeof(dummyFmt), "%s", i18n::tr("solo.hud.dummies"));
+        std::snprintf(buf, sizeof(buf), dummyFmt, dummyHits_);
         ui::drawTextBold(buf, 16, y, 20, { 200, 230, 120, 255 }); y += 22;
     }
     const char* exitHint = i18n::tr("solo.hud.exit");

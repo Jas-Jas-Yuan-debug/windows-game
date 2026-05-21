@@ -12,7 +12,7 @@
 #include <utility>
 namespace {
 constexpr std::size_t kSaltBytes = 16;
-constexpr std::size_t kMaxUsernameLen = 32;
+constexpr std::size_t kMaxUsernameLen = 24;
 std::int64_t nowEpoch() {
     using namespace std::chrono;
     return duration_cast<seconds>(system_clock::now().time_since_epoch()).count();
@@ -138,9 +138,12 @@ void AuthManager::initSchema() {
 }
 bool AuthManager::isValidUsername(const std::string& username) {
     if (username.empty() || username.size() > kMaxUsernameLen) return false;
-    for (char c : username) {
-        if (c == '|') return false;
-        if (std::isspace(static_cast<unsigned char>(c))) return false;
+    for (char ch : username) {
+        unsigned char c = static_cast<unsigned char>(ch);
+        bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+               || (c >= '0' && c <= '9')
+               || c == '_' || c == '.' || c == '-';
+        if (!ok) return false;
     }
     return true;
 }
@@ -184,7 +187,8 @@ std::string AuthManager::currentRank() const {
 bool AuthManager::loadUserByName(const std::string& username, User& out) {
     const char* sql =
         "SELECT id, username, password_hash, salt, xp, level, total_kills, total_deaths, "
-        "total_headshots, matches_played, matches_won, team FROM users WHERE username = ?";
+        "total_headshots, matches_played, matches_won, team, credits, selected_weapon "
+        "FROM users WHERE username = ?";
     sqlite3_stmt* raw = nullptr;
     if (sqlite3_prepare_v2(db_, sql, -1, &raw, nullptr) != SQLITE_OK) return false;
     Stmt st(raw);
@@ -204,12 +208,15 @@ bool AuthManager::loadUserByName(const std::string& username, User& out) {
     out.matchesWon = sqlite3_column_int(st.s, 10);
     const unsigned char* tm = sqlite3_column_text(st.s, 11);
     out.team = tm ? reinterpret_cast<const char*>(tm) : "";
+    out.credits = sqlite3_column_int(st.s, 12);
+    out.selectedWeapon = sqlite3_column_int(st.s, 13);
     return true;
 }
 bool AuthManager::loadUserById(int id, User& out) {
     const char* sql =
         "SELECT id, username, password_hash, salt, xp, level, total_kills, total_deaths, "
-        "total_headshots, matches_played, matches_won, team FROM users WHERE id = ?";
+        "total_headshots, matches_played, matches_won, team, credits, selected_weapon "
+        "FROM users WHERE id = ?";
     sqlite3_stmt* raw = nullptr;
     if (sqlite3_prepare_v2(db_, sql, -1, &raw, nullptr) != SQLITE_OK) return false;
     Stmt st(raw);
@@ -229,6 +236,8 @@ bool AuthManager::loadUserById(int id, User& out) {
     out.matchesWon = sqlite3_column_int(st.s, 10);
     const unsigned char* tm = sqlite3_column_text(st.s, 11);
     out.team = tm ? reinterpret_cast<const char*>(tm) : "";
+    out.credits = sqlite3_column_int(st.s, 12);
+    out.selectedWeapon = sqlite3_column_int(st.s, 13);
     return true;
 }
 bool AuthManager::registerUser(const std::string& username,
@@ -798,13 +807,15 @@ int AuthManager::addCredits(int userId, int delta) {
 }
 std::string AuthManager::hashPassword(const std::string& saltHex,
                                       const std::string& password) {
+    constexpr std::uint32_t kPbkdf2Iters = 100000;
     std::string saltBytes = hexToBytes(saltHex);
     unsigned char digest[cg::kSha256Bytes];
-    if (!cg::sha256SaltPassword(
-            reinterpret_cast<const unsigned char*>(saltBytes.data()), saltBytes.size(),
+    if (!cg::pbkdf2Sha256(
             reinterpret_cast<const unsigned char*>(password.data()), password.size(),
-            digest)) {
-        throw std::runtime_error("sha256SaltPassword failed");
+            reinterpret_cast<const unsigned char*>(saltBytes.data()), saltBytes.size(),
+            kPbkdf2Iters,
+            digest, cg::kSha256Bytes)) {
+        throw std::runtime_error("pbkdf2Sha256 failed");
     }
     return bytesToHex(digest, cg::kSha256Bytes);
 }

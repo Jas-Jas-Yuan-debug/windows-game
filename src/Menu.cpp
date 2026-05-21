@@ -100,14 +100,17 @@ Menu::Result Menu::run() {
         DrawRectangle(cardX, cardY, cardW, cardH, { 30, 35, 50, 255 });
         DrawRectangleLines(cardX, cardY, cardW, cardH, { 80, 90, 120, 255 });
         char line1[256];
-        std::snprintf(line1, sizeof(line1), i18n::tr("menu.welcome.fmt"),
-                      username.c_str(), rank.c_str(), level, xp);
+        char welcomeFmt[128];
+        std::snprintf(welcomeFmt, sizeof(welcomeFmt), "%s", i18n::tr("menu.welcome.fmt"));
+        std::snprintf(line1, sizeof(line1), welcomeFmt, username.c_str(), rank.c_str(), level, xp);
         char teamPart[64];
         if (!team.empty()) {
             const char* teamLoc = team == "BLUE" ? i18n::tr("common.team.blue")
                                 : team == "RED"  ? i18n::tr("common.team.red")
                                 : team.c_str();
-            std::snprintf(teamPart, sizeof(teamPart), i18n::tr("menu.team.fmt"), teamLoc);
+            char teamFmt[64];
+            std::snprintf(teamFmt, sizeof(teamFmt), "%s", i18n::tr("menu.team.fmt"));
+            std::snprintf(teamPart, sizeof(teamPart), teamFmt, teamLoc);
         } else {
             teamPart[0] = '\0';
         }
@@ -123,9 +126,13 @@ Menu::Result Menu::run() {
         else if (team == "RED") teamColor = { 230, 80, 80, 255 };
         ui::drawTextBold(teamPart, cx0 + baseW, y1, cardFs, teamColor);
         char line2[160];
-        std::snprintf(line2, sizeof(line2), i18n::tr("menu.credits.fmt"), credits);
+        char creditsFmt[64];
+        std::snprintf(creditsFmt, sizeof(creditsFmt), "%s", i18n::tr("menu.credits.fmt"));
+        std::snprintf(line2, sizeof(line2), creditsFmt, credits);
         char line3[160];
-        std::snprintf(line3, sizeof(line3), i18n::tr("menu.weapon.fmt"), weaponName);
+        char weaponFmt[64];
+        std::snprintf(weaponFmt, sizeof(weaponFmt), "%s", i18n::tr("menu.weapon.fmt"));
+        std::snprintf(line3, sizeof(line3), weaponFmt, weaponName);
         int row2Fs = 18;
         int sep = 24;
         int line2W = ui::measureTextBold(line2, row2Fs);

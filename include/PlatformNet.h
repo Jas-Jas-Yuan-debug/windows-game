@@ -6,6 +6,9 @@
   #include <winsock2.h>
   #include <ws2tcpip.h>
   #include <windows.h>
+  #ifndef TCP_NODELAY
+  #define TCP_NODELAY 1
+  #endif
   typedef SOCKET cg_socket_t;
   typedef int cg_ssize_t;
   #define CG_INVALID_SOCKET INVALID_SOCKET

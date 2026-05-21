@@ -61,6 +61,9 @@ public:
     int addPlayer(int clientId, int userId, const std::string& username, const std::string& team,
                   int weaponId = 1);
     int addBot(const std::string& username, const std::string& team, int weaponId);
+    int slotIndexByUserId(int userId) const;
+    void reattachSlot(int slotIndex, int newClientId);
+    void zeroInputAt(int slotIndex);
     void computeBotInputs(float dt);
     void tick(float dt, std::vector<KillEvent>& killEvents);
     bool forfeit(int clientId);

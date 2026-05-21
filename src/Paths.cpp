@@ -2,7 +2,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #ifdef _WIN32
   #ifndef WIN32_LEAN_AND_MEAN
@@ -143,5 +145,37 @@ bool ensureDir(const std::string& dir) {
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
     return !ec;
+}
+std::string loadTlsPinForHost(const std::string& host) {
+    std::ifstream f(userDataPath("client.prefs"));
+    if (!f.good()) return std::string();
+    std::string key = "tls_pin." + host + "=";
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.compare(0, key.size(), key) == 0) {
+            return line.substr(key.size());
+        }
+    }
+    return std::string();
+}
+void saveTlsPinForHost(const std::string& host, const std::string& fingerprintHex) {
+    std::unordered_map<std::string, std::string> lines;
+    std::string path = userDataPath("client.prefs");
+    if (path.empty()) return;
+    {
+        std::ifstream in(path);
+        std::string line;
+        while (std::getline(in, line)) {
+            auto eq = line.find('=');
+            if (eq == std::string::npos) continue;
+            lines[line.substr(0, eq)] = line.substr(eq + 1);
+        }
+    }
+    lines["tls_pin." + host] = fingerprintHex;
+    std::ofstream out(path);
+    if (!out.good()) return;
+    for (const auto& kv : lines) {
+        out << kv.first << '=' << kv.second << '\n';
+    }
 }
 }

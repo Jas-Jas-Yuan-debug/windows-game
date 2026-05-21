@@ -14,6 +14,7 @@ public:
     bool start(std::uint16_t port, int teamSize, const std::string& dbPath, std::string& err);
     void stop();
     bool isRunning() const { return running_.load(); }
+    bool isReady() const;
     std::uint16_t port() const { return port_; }
 private:
     std::unique_ptr<Server> server_;

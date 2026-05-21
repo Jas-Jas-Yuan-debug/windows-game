@@ -144,7 +144,7 @@ bool LoginScreen::run() {
             } else if (!net_.isConnected()) {
                 setStatus("Not connected", StatusKind::Error);
             } else {
-                net_.sendTcp({ proto::kT_Login, username_, password_ });
+                net_.sendLogin(username_, password_);
                 pending_ = Pending::Login;
                 pendingStarted_ = GetTime();
                 setStatus("Logging in...", StatusKind::Info);
@@ -155,7 +155,7 @@ bool LoginScreen::run() {
             } else if (!net_.isConnected()) {
                 setStatus("Not connected", StatusKind::Error);
             } else {
-                net_.sendTcp({ proto::kT_Register, username_, password_ });
+                net_.sendRegister(username_, password_);
                 pending_ = Pending::Register;
                 pendingStarted_ = GetTime();
                 setStatus("Registering...", StatusKind::Info);
