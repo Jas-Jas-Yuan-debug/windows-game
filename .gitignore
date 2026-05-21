@@ -1,0 +1,18 @@
+# Mac 系统自带的缩略图垃圾文件（每个 Mac 都有，最该屏蔽）
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# VS Code 的本地缓存和个人设置
+.vscode/
+.history/
+*.code-workspace
+
+# C++ 编译出来的二进制文件和 build 文件夹
+build*/
+bin/
+obj/
+*.o
+*.out
+*.exe
+*.app
