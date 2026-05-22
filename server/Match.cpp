@@ -33,42 +33,6 @@ void loadObstaclesFromShared(const std::string& mapName, std::vector<AABB>& out)
         { {-14.0f, 1.0f, -2.0f}, {1.0f, 2.0f, 5.0f} },
     };
 }
-void buildDust(std::vector<AABB>& out) {
-    out = {
-        { {-10.0f, 1.5f, -10.0f}, {1.0f, 3.0f, 8.0f} },
-        { {-10.0f, 1.5f,  10.0f}, {1.0f, 3.0f, 8.0f} },
-        { { 10.0f, 1.5f, -10.0f}, {1.0f, 3.0f, 8.0f} },
-        { { 10.0f, 1.5f,  10.0f}, {1.0f, 3.0f, 8.0f} },
-        { {  0.0f, 1.5f,   0.0f}, {3.0f, 3.0f, 3.0f} },
-        { {  5.0f, 1.0f,   3.0f}, {1.5f, 2.0f, 1.5f} },
-        { { -5.0f, 1.0f,  -3.0f}, {1.5f, 2.0f, 1.5f} },
-        { {  0.0f, 1.0f,   8.0f}, {2.5f, 2.0f, 1.0f} },
-        { {  0.0f, 1.0f,  -8.0f}, {2.5f, 2.0f, 1.0f} },
-        { {-15.0f, 1.0f, -18.0f}, {2.0f, 2.0f, 1.0f} },
-        { { 15.0f, 1.0f,  18.0f}, {2.0f, 2.0f, 1.0f} },
-        { {  8.0f, 1.0f, -16.0f}, {2.0f, 2.0f, 1.0f} },
-    };
-}
-void buildOffice(std::vector<AABB>& out) {
-    out = {
-        { {  0.0f, 1.25f, 0.0f}, {1.0f, 2.5f, 10.0f} },
-        { {-10.0f, 1.0f, -8.0f}, {3.0f, 2.0f, 1.0f} },
-        { {-10.0f, 1.0f, -4.0f}, {3.0f, 2.0f, 1.0f} },
-        { {-13.0f, 1.0f, -6.0f}, {1.0f, 2.0f, 3.0f} },
-        { { 10.0f, 1.0f,  8.0f}, {3.0f, 2.0f, 1.0f} },
-        { { 10.0f, 1.0f,  4.0f}, {3.0f, 2.0f, 1.0f} },
-        { { 13.0f, 1.0f,  6.0f}, {1.0f, 2.0f, 3.0f} },
-        { { -6.0f, 1.0f,  8.0f}, {1.0f, 2.0f, 4.0f} },
-        { { -2.0f, 1.0f,  8.0f}, {1.0f, 2.0f, 4.0f} },
-        { {  6.0f, 1.0f, -8.0f}, {1.0f, 2.0f, 4.0f} },
-        { {  2.0f, 1.0f, -8.0f}, {1.0f, 2.0f, 4.0f} },
-        { { -5.0f, 1.0f,  0.0f}, {1.5f, 2.0f, 1.5f} },
-        { {  5.0f, 1.0f,  0.0f}, {1.5f, 2.0f, 1.5f} },
-        { {-15.0f, 1.0f, 12.0f}, {2.0f, 2.0f, 2.0f} },
-        { { 15.0f, 1.0f,-12.0f}, {2.0f, 2.0f, 2.0f} },
-        { {  0.0f, 1.0f, 15.0f}, {3.0f, 2.0f, 1.0f} },
-    };
-}
 bool rayBox(const Vec3& orig, const Vec3& dir, const AABB& box, float& tHit) {
     float minx = box.center.x - box.size.x * 0.5f;
     float maxx = box.center.x + box.size.x * 0.5f;
@@ -142,6 +106,21 @@ int Match::addPlayer(int clientId, int userId, const std::string& username, cons
     s.alive = true;
     slots_.push_back(std::move(s));
     return (int)slots_.size() - 1;
+}
+int Match::slotIndexByUserId(int userId) const {
+    for (size_t i = 0; i < slots_.size(); ++i) {
+        if (!slots_[i].isBot && slots_[i].userId == userId) return (int)i;
+    }
+    return -1;
+}
+void Match::reattachSlot(int slotIndex, int newClientId) {
+    if (slotIndex < 0 || slotIndex >= (int)slots_.size()) return;
+    slots_[slotIndex].clientId = newClientId;
+    slots_[slotIndex].active = true;
+}
+void Match::zeroInputAt(int slotIndex) {
+    if (slotIndex < 0 || slotIndex >= (int)slots_.size()) return;
+    slots_[slotIndex].input = PlayerInput{};
 }
 int Match::addBot(const std::string& username, const std::string& team, int weaponId) {
     Slot s;
@@ -420,7 +399,7 @@ std::string Match::buildStateFor(const Slot& self) const {
                       i, s.pos.x, s.pos.y, s.pos.z, s.yaw, s.hp,
                       s.team.c_str(), s.alive ? 1 : 0, s.userId);
         plist += buf;
-        plist += s.username;
+        plist += proto::urlEncode(s.username);
     }
     int count = visibleCount;
     std::vector<std::string> fields = {

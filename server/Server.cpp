@@ -1,8 +1,10 @@
 #include "Server.h"
 #include "Crypto.h"
+#include "Paths.h"
 #include "Weapon.h"
 #include "Maps.h"
 #include <algorithm>
+#include <fstream>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -11,13 +13,14 @@
 #include <limits>
 #include <random>
 #include <sstream>
+#include <vector>
 namespace {
 constexpr int kServerVersion = 1;
 constexpr const char* kHelloVerStr = "1";
 constexpr int kMaxTcpMsgsPerSec        = 20;
 constexpr int kMaxUdpMsgsPerSec        = 90;
 constexpr long long kChatMinIntervalMs = 500;
-constexpr int kMaxChatLen              = 200;
+constexpr int kMaxChatLen              = 280;
 constexpr int kMaxConnPerIp            = 8;
 constexpr int kMaxUsernameLen          = 24;
 constexpr int kMaxPasswordLen          = 64;
@@ -38,13 +41,17 @@ constexpr unsigned int kFlagBadUsername    = 1u << 10;
 constexpr unsigned int kFlagRegisterAbuse  = 1u << 11;
 constexpr unsigned int kFlagIdleAuth       = 1u << 12;
 constexpr unsigned int kFlagInputIdle      = 1u << 13;
+constexpr unsigned int kFlagBadHmac        = 1u << 14;
 constexpr long long kPreLoginIdleMs        = 30000;
 constexpr long long kInMatchInputIdleMs    = 30000;
 constexpr long long kRegisterWindowMs      = 3600000;
 constexpr int kMaxRegisterPerIpPerHour     = 5;
 constexpr int kAimSnapBurstThreshold       = 25;
 constexpr float kAimSnapRad                = 2.8f;
-constexpr int kHsStreakLogThreshold        = 5;
+constexpr int kAimSnapKickThreshold        = 60;
+constexpr int kBadHmacKickThreshold        = 5;
+constexpr int kUdpFloodKickThreshold       = 5;
+constexpr int kBadInputKickThreshold       = 30;
 bool isLoopbackIp(unsigned int ipKey) {
     return (ipKey >> 24) == 127;
 }
@@ -73,11 +80,14 @@ bool finiteFloat(float f) {
     return f == f && f != std::numeric_limits<float>::infinity()
                   && f != -std::numeric_limits<float>::infinity();
 }
+std::string makeRandomHex(std::size_t bytes) {
+    std::vector<unsigned char> buf(bytes);
+    if (!cg::randomBytes(buf.data(), bytes)) return std::string();
+    return cg::bytesToHex(buf.data(), bytes);
+}
 std::string makeUdpToken() {
     unsigned char buf[8];
-    if (!cg::randomBytes(buf, 8)) {
-        for (int i = 0; i < 8; ++i) buf[i] = (unsigned char)(std::rand() & 0xFF);
-    }
+    if (!cg::randomBytes(buf, 8)) return std::string();
     static const char kHex[] = "0123456789abcdef";
     std::string out(16, '0');
     for (int i = 0; i < 8; ++i) {
@@ -142,16 +152,15 @@ void Server::closeSockets() {
     if (udpFd_ != CG_INVALID_SOCKET) { cg_close(udpFd_); udpFd_ = CG_INVALID_SOCKET; }
 }
 void Server::sendRaw(Client& c, const std::string& bytes) {
-    if (c.fd == CG_INVALID_SOCKET) return;
+    if (c.fd == CG_INVALID_SOCKET || !c.tls) return;
     c.sendBuf += bytes;
+    if (!c.tlsReady) return;
     while (!c.sendBuf.empty()) {
-        cg_ssize_t n = ::send(c.fd, c.sendBuf.data(), (int)c.sendBuf.size(), 0);
-        if (n > 0) {
-            c.sendBuf.erase(0, (size_t)n);
-        } else if (n == CG_SOCKET_ERROR) {
-            int e = cg_lasterr();
-            if (e == CG_EAGAIN || e == CG_EWOULDBLOCK) break;
-            c.wantClose = true;
+        std::size_t wrote = 0;
+        TlsConn::Status st = c.tls->write(c.sendBuf.data(), c.sendBuf.size(), wrote);
+        if (st == TlsConn::Status::Ok && wrote > 0) {
+            c.sendBuf.erase(0, wrote);
+        } else if (st == TlsConn::Status::WantRead || st == TlsConn::Status::WantWrite) {
             break;
         } else {
             c.wantClose = true;
@@ -186,37 +195,57 @@ void Server::acceptNewClient() {
         }
         ipConnCount_[ipKey]++;
         int yes = 1;
-        setsockopt(fd, IPPROTO_TCP, 1 , (const char*)&yes, sizeof(yes));
+        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (const char*)&yes, sizeof(yes));
         Client c;
         c.id = nextClientId_++;
         c.fd = fd;
         c.addr = addr;
         c.connectedAtMs = nowMillis();
         c.lastInputAtMs = c.connectedAtMs;
+        c.tls = std::make_unique<TlsConn>();
+        std::string tlsErr;
+        if (!c.tls->attach(tlsCtx_, /*isServer=*/true, (std::uintptr_t)fd, tlsErr)) {
+            std::cerr << "[tls] attach failed: " << tlsErr << std::endl;
+            cg_close(fd);
+            continue;
+        }
         clients_[c.id] = std::move(c);
-        std::vector<std::string> hello = {
-            proto::kT_Hello, kHelloVerStr,
-            std::to_string(proto::kTickRate),
-            std::to_string(cfg_.teamSize),
-        };
-        sendToClient(clients_[c.id], proto::encodeLine(hello));
-        std::cerr << "[srv] accepted client " << clients_[c.id].id << std::endl;
+        std::cerr << "[srv] accepted client " << clients_[c.id].id << " (TLS handshaking)" << std::endl;
     }
 }
+void Server::onTlsReady(Client& c) {
+    if (c.tlsReady) return;
+    c.tlsReady = true;
+    std::vector<std::string> hello = {
+        proto::kT_Hello, kHelloVerStr,
+        std::to_string(proto::kTickRate),
+        std::to_string(cfg_.teamSize),
+    };
+    sendToClient(c, proto::encodeLine(hello));
+    std::cerr << "[tls] client " << c.id << " handshake done" << std::endl;
+}
 void Server::readFromClient(Client& c) {
+    if (!c.tls) { c.wantClose = true; return; }
+    if (!c.tlsReady) {
+        TlsConn::Status st = c.tls->handshake();
+        if (st == TlsConn::Status::Ok) onTlsReady(c);
+        else if (st == TlsConn::Status::WantRead || st == TlsConn::Status::WantWrite) return;
+        else { c.wantClose = true; return; }
+        if (!c.tlsReady) return;
+    }
     char buf[4096];
     while (true) {
-        cg_ssize_t n = ::recv(c.fd, buf, sizeof(buf), 0);
-        if (n > 0) {
-            c.recvBuf.append(buf, buf + n);
-        } else if (n == 0) {
-            c.wantClose = true; break;
+        std::size_t got = 0;
+        TlsConn::Status st = c.tls->read(buf, sizeof(buf), got);
+        if (st == TlsConn::Status::Ok && got > 0) {
+            c.recvBuf.append(buf, buf + got);
+        } else if (st == TlsConn::Status::WantRead || st == TlsConn::Status::WantWrite) {
+            break;
         } else {
-            int e = cg_lasterr();
-            if (e == CG_EAGAIN || e == CG_EWOULDBLOCK) break;
             c.wantClose = true; break;
         }
     }
+    if (!c.sendBuf.empty()) sendRaw(c, std::string{});
     while (true) {
         auto pos = c.recvBuf.find('\n');
         if (pos == std::string::npos) break;
@@ -254,6 +283,7 @@ void Server::sendLoginOk(Client& c) {
         c.udpToken,
         std::to_string(c.credits),
         std::to_string(c.selectedWeapon),
+        c.udpHmacKey,
     };
     sendToClient(c, proto::encodeLine(fields));
 }
@@ -297,29 +327,38 @@ std::string Server::pickRandomMap() {
     std::uniform_int_distribution<size_t> dist(0, maps.size() - 1);
     return maps[dist(rng)];
 }
-void Server::startMatchWithBotFill() {
-    if (queue_.empty()) return;
-    int teamSize = cfg_.teamSize;
-    int need = 2 * teamSize;
-    std::vector<int> chosen(queue_.begin(), queue_.end());
-    queue_.clear();
-    queueWaitStartMs_ = 0;
-    const std::string map = pickRandomMap();
-    std::vector<int> blueIds, redIds;
-    for (int cid : chosen) {
+void Server::launchMatch(std::vector<int> candidateCids) {
+    const int teamSize = cfg_.teamSize;
+    std::vector<int> blueIds, redIds, requeue;
+    for (int cid : candidateCids) {
         auto it = clients_.find(cid);
-        if (it == clients_.end()) continue;
+        if (it == clients_.end() || !it->second.loggedIn) continue;
         if (it->second.team == "BLUE") blueIds.push_back(cid);
         else redIds.push_back(cid);
     }
-    while ((int)blueIds.size() > teamSize) { redIds.push_back(blueIds.back()); blueIds.pop_back(); }
-    while ((int)redIds.size() > teamSize)  { blueIds.push_back(redIds.back()); redIds.pop_back(); }
+    while ((int)blueIds.size() > teamSize) {
+        requeue.push_back(blueIds.back());
+        blueIds.pop_back();
+    }
+    while ((int)redIds.size() > teamSize) {
+        requeue.push_back(redIds.back());
+        redIds.pop_back();
+    }
+    for (int cid : requeue) {
+        auto it = clients_.find(cid);
+        if (it == clients_.end()) continue;
+        it->second.queued = true;
+        queue_.push_back(cid);
+    }
+    if (blueIds.empty() && redIds.empty()) return;
+    const std::string map = pickRandomMap();
     int matchId = nextMatchId_++;
     auto match = std::make_unique<Match>(matchId, map, teamSize);
-    auto addOne = [&](int cid, const std::string& team) {
+    auto addOne = [&](int cid) {
         auto it = clients_.find(cid);
         if (it == clients_.end()) return;
         auto& c = it->second;
+        const std::string& team = c.team;
         int wid = c.selectedWeapon;
         if (!auth_.ownsWeapon(c.userId, wid)) wid = proto::kWeaponPistol;
         int slot = match->addPlayer(c.id, c.userId, c.username, team, wid);
@@ -330,20 +369,18 @@ void Server::startMatchWithBotFill() {
         c.aimSnapCount = 0;
         c.lastInputAtMs = nowMillis();
     };
-    for (int cid : blueIds) addOne(cid, "BLUE");
-    for (int cid : redIds)  addOne(cid, "RED");
+    for (int cid : blueIds) addOne(cid);
+    for (int cid : redIds) addOne(cid);
     int blueFill = teamSize - (int)blueIds.size();
     int redFill  = teamSize - (int)redIds.size();
     int botNum = 1;
     for (int i = 0; i < blueFill; ++i) {
         char nm[24]; std::snprintf(nm, sizeof(nm), "Bot%d", botNum++);
-        int wid = ((i % 5) + 1);
-        match->addBot(nm, "BLUE", wid);
+        match->addBot(nm, "BLUE", (i % proto::kWeaponCount) + 1);
     }
     for (int i = 0; i < redFill; ++i) {
         char nm[24]; std::snprintf(nm, sizeof(nm), "Bot%d", botNum++);
-        int wid = ((i % 5) + 1);
-        match->addBot(nm, "RED", wid);
+        match->addBot(nm, "RED", (i % proto::kWeaponCount) + 1);
     }
     const auto& players = match->slots();
     for (const auto& p : players) {
@@ -351,28 +388,32 @@ void Server::startMatchWithBotFill() {
         auto it = clients_.find(p.clientId);
         if (it == clients_.end()) continue;
         auto& c = it->second;
-        std::vector<std::string> start = {
+        sendToClient(c, proto::encodeLine({
             proto::kT_MatchStart, map, p.team, std::to_string((int)players.size()),
-        };
-        sendToClient(c, proto::encodeLine(start));
+        }));
         for (size_t i = 0; i < players.size(); ++i) {
             const auto& q2 = players[i];
-            std::vector<std::string> mp = {
+            sendToClient(c, proto::encodeLine({
                 proto::kT_MatchPlayer,
                 std::to_string((int)i),
                 std::to_string(q2.userId),
                 q2.username,
                 q2.team,
-            };
-            sendToClient(c, proto::encodeLine(mp));
+            }));
         }
     }
-    int botCount = blueFill + redFill;
     matches_[matchId] = std::move(match);
     std::cerr << "[srv] match " << matchId << " started on " << map
-              << " with " << players.size() << " players (" << botCount
-              << " bots filled after queue wait)" << std::endl;
-    (void)need;
+              << " with " << players.size() << " players ("
+              << blueIds.size() << " blue, " << redIds.size() << " red, "
+              << (blueFill + redFill) << " bots)" << std::endl;
+}
+void Server::startMatchWithBotFill() {
+    if (queue_.empty()) return;
+    std::vector<int> chosen(queue_.begin(), queue_.end());
+    queue_.clear();
+    queueWaitStartMs_ = 0;
+    launchMatch(chosen);
 }
 void Server::enforceIdleDisconnects(long long nowMs) {
     for (auto& kv : clients_) {
@@ -408,64 +449,9 @@ void Server::tryStartMatch() {
     if ((int)queue_.size() < need) return;
     std::vector<int> chosen(queue_.begin(), queue_.begin() + need);
     queue_.erase(queue_.begin(), queue_.begin() + need);
-    const std::string map = pickRandomMap();
-    std::vector<int> blueIds, redIds;
-    for (int cid : chosen) {
-        auto it = clients_.find(cid);
-        if (it == clients_.end()) continue;
-        if (it->second.team == "BLUE") blueIds.push_back(cid);
-        else redIds.push_back(cid);
-    }
-    while ((int)blueIds.size() > cfg_.teamSize) {
-        redIds.push_back(blueIds.back()); blueIds.pop_back();
-    }
-    while ((int)redIds.size() > cfg_.teamSize) {
-        blueIds.push_back(redIds.back()); redIds.pop_back();
-    }
-    int matchId = nextMatchId_++;
-    auto match = std::make_unique<Match>(matchId, map, cfg_.teamSize);
-    auto addOne = [&](int cid, const std::string& team) {
-        auto it = clients_.find(cid);
-        if (it == clients_.end()) return;
-        auto& c = it->second;
-        int wid = c.selectedWeapon;
-        if (!auth_.ownsWeapon(c.userId, wid)) wid = proto::kWeaponPistol;
-        int slot = match->addPlayer(c.id, c.userId, c.username, team, wid);
-        c.matchId = matchId;
-        c.slotInMatch = slot;
-        c.queued = false;
-        c.hadFirstInput = false;
-        c.aimSnapCount = 0;
-        c.lastInputAtMs = nowMillis();
-    };
-    for (int cid : blueIds) addOne(cid, "BLUE");
-    for (int cid : redIds)  addOne(cid, "RED");
-    const auto& players = match->slots();
-    for (const auto& p : players) {
-        auto it = clients_.find(p.clientId);
-        if (it == clients_.end()) continue;
-        auto& c = it->second;
-        std::vector<std::string> start = {
-            proto::kT_MatchStart, map, p.team, std::to_string((int)players.size()),
-        };
-        sendToClient(c, proto::encodeLine(start));
-        for (size_t i = 0; i < players.size(); ++i) {
-            const auto& q2 = players[i];
-            std::vector<std::string> mp = {
-                proto::kT_MatchPlayer,
-                std::to_string((int)i),
-                std::to_string(q2.userId),
-                q2.username,
-                q2.team,
-            };
-            sendToClient(c, proto::encodeLine(mp));
-        }
-    }
-    matches_[matchId] = std::move(match);
-    std::cerr << "[srv] match " << matchId << " started on " << map
-              << " with " << players.size() << " players" << std::endl;
+    launchMatch(chosen);
 }
-void Server::leaveMatchOrQueue(Client& c, bool announce) {
+void Server::leaveMatchOrQueue(Client& c, bool announce, bool immediateForfeit) {
     if (c.queued) {
         queue_.erase(std::remove(queue_.begin(), queue_.end(), c.id), queue_.end());
         c.queued = false;
@@ -475,18 +461,81 @@ void Server::leaveMatchOrQueue(Client& c, bool announce) {
     if (c.matchId >= 0) {
         auto it = matches_.find(c.matchId);
         if (it != matches_.end()) {
-            bool over = it->second->forfeit(c.id);
-            if (over) recordAndAnnounceMatchEnd(*it->second);
+            if (immediateForfeit || c.userId == 0) {
+                bool over = it->second->forfeit(c.id);
+                if (over) recordAndAnnounceMatchEnd(*it->second);
+            } else {
+                it->second->zeroInputAt(c.slotInMatch);
+                OrphanMatchSlot orphan;
+                orphan.matchId = c.matchId;
+                orphan.slotIndex = c.slotInMatch;
+                orphan.expiresAtMs = nowMillis() + 30000;
+                orphanSlots_[c.userId] = orphan;
+                std::cerr << "[srv] orphan match slot user=" << c.username
+                          << " match=" << c.matchId << " slot=" << c.slotInMatch
+                          << " (30s grace)" << std::endl;
+            }
         }
         c.matchId = -1;
         c.slotInMatch = -1;
+    }
+}
+bool Server::tryReattachOrphan(Client& c) {
+    auto it = orphanSlots_.find(c.userId);
+    if (it == orphanSlots_.end()) return false;
+    OrphanMatchSlot orphan = it->second;
+    orphanSlots_.erase(it);
+    auto mit = matches_.find(orphan.matchId);
+    if (mit == matches_.end()) return false;
+    mit->second->reattachSlot(orphan.slotIndex, c.id);
+    c.matchId = orphan.matchId;
+    c.slotInMatch = orphan.slotIndex;
+    const auto& players = mit->second->slots();
+    if (orphan.slotIndex < 0 || orphan.slotIndex >= (int)players.size()) return false;
+    sendToClient(c, proto::encodeLine({
+        proto::kT_Reconnected,
+        std::to_string(orphan.matchId),
+        std::to_string(orphan.slotIndex),
+    }));
+    sendToClient(c, proto::encodeLine({
+        proto::kT_MatchStart, mit->second->map(),
+        players[orphan.slotIndex].team,
+        std::to_string((int)players.size()),
+    }));
+    for (size_t i = 0; i < players.size(); ++i) {
+        sendToClient(c, proto::encodeLine({
+            proto::kT_MatchPlayer,
+            std::to_string((int)i),
+            std::to_string(players[i].userId),
+            players[i].username,
+            players[i].team,
+        }));
+    }
+    std::cerr << "[srv] reattach user=" << c.username
+              << " match=" << orphan.matchId << " slot=" << orphan.slotIndex << std::endl;
+    return true;
+}
+void Server::expireOrphans(long long nowMs) {
+    for (auto it = orphanSlots_.begin(); it != orphanSlots_.end(); ) {
+        if (it->second.expiresAtMs > nowMs) { ++it; continue; }
+        auto mit = matches_.find(it->second.matchId);
+        if (mit != matches_.end()) {
+            const auto& slots = mit->second->slots();
+            if (it->second.slotIndex >= 0 && it->second.slotIndex < (int)slots.size()) {
+                bool over = mit->second->forfeit(slots[it->second.slotIndex].clientId);
+                std::cerr << "[srv] orphan expired user=" << it->first
+                          << " (forfeit match " << it->second.matchId << ")" << std::endl;
+                if (over) recordAndAnnounceMatchEnd(*mit->second);
+            }
+        }
+        it = orphanSlots_.erase(it);
     }
 }
 void Server::disconnectClient(int clientId) {
     auto it = clients_.find(clientId);
     if (it == clients_.end()) return;
     Client& c = it->second;
-    leaveMatchOrQueue(c, true);
+    leaveMatchOrQueue(c, true, /*immediateForfeit=*/false);
     if (c.suspicionFlags) {
         std::cerr << "[antichea] disconnect client " << clientId
                   << " user=" << c.username
@@ -525,12 +574,27 @@ void Server::readUdp() {
         std::string msg(buf, buf + n);
         auto fields = proto::splitDecode(msg);
         if (fields.empty()) continue;
-        if (fields[0] == proto::kU_Input && fields.size() >= 8) {
+        if (fields[0] == proto::kU_Input && fields.size() >= 9) {
             const std::string& tok = fields[1];
             Client* c = clientByUdpToken(tok);
             if (!c) continue;
             if (c->addr.sin_addr.s_addr != src.sin_addr.s_addr) {
                 c->suspicionFlags |= kFlagUdpIpMismatch;
+                continue;
+            }
+            if (c->udpHmacKey.empty()) continue;
+            const std::string& givenTag = fields.back();
+            std::vector<std::string> body(fields.begin(), fields.end() - 1);
+            std::string expectTag = cg::hmacSha256Hex(c->udpHmacKey, proto::encodeLine(body));
+            if (givenTag.size() != expectTag.size() ||
+                std::memcmp(givenTag.data(), expectTag.data(), givenTag.size()) != 0) {
+                c->suspicionFlags |= kFlagBadHmac;
+                if (++c->badHmacCount >= kBadHmacKickThreshold) {
+                    c->wantClose = true;
+                    std::cerr << "[antichea] auto-kick client=" << c->id
+                              << " user=" << c->username << " (bad HMAC ×"
+                              << c->badHmacCount << ")" << std::endl;
+                }
                 continue;
             }
             long long nowMs = nowMillis();
@@ -541,6 +605,14 @@ void Server::readUdp() {
             c->udpMsgCount++;
             if (c->udpMsgCount > kMaxUdpMsgsPerSec) {
                 c->suspicionFlags |= kFlagUdpFlood;
+                if (c->udpMsgCount == kMaxUdpMsgsPerSec + 1) {
+                    if (++c->udpFloodCount >= kUdpFloodKickThreshold) {
+                        c->wantClose = true;
+                        std::cerr << "[antichea] auto-kick client=" << c->id
+                                  << " user=" << c->username << " (UDP flood ×"
+                                  << c->udpFloodCount << ")" << std::endl;
+                    }
+                }
                 continue;
             }
             if (!c->udpKnown) {
@@ -562,6 +634,12 @@ void Server::readUdp() {
             if (!finiteFloat(in.moveX) || !finiteFloat(in.moveZ) ||
                 !finiteFloat(in.yaw)   || !finiteFloat(in.pitch)) {
                 c->suspicionFlags |= kFlagInputNonFinite;
+                if (++c->badInputCount >= kBadInputKickThreshold) {
+                    c->wantClose = true;
+                    std::cerr << "[antichea] auto-kick client=" << c->id
+                              << " user=" << c->username << " (bad input ×"
+                              << c->badInputCount << ")" << std::endl;
+                }
                 continue;
             }
             float ml = std::sqrt(in.moveX * in.moveX + in.moveZ * in.moveZ);
@@ -593,6 +671,12 @@ void Server::readUdp() {
                         std::cerr << "[antichea] aim-snap burst client=" << c->id
                                   << " user=" << c->username
                                   << " snaps=" << c->aimSnapCount << std::endl;
+                    }
+                    if (c->aimSnapCount >= kAimSnapKickThreshold) {
+                        c->wantClose = true;
+                        std::cerr << "[antichea] auto-kick client=" << c->id
+                                  << " user=" << c->username << " (aim-snap ×"
+                                  << c->aimSnapCount << ")" << std::endl;
                     }
                 }
             }
@@ -797,13 +881,19 @@ void Server::dispatchTcp(Client& c, const std::string& line) {
         c.username = u.username;
         c.team = u.team;
         c.udpToken = makeUdpToken();
+        c.udpHmacKey = makeRandomHex(32);
+        if (c.udpToken.empty() || c.udpHmacKey.empty()) {
+            sendToClient(c, proto::encodeLine({proto::kT_Err, "server rng failed"}));
+            return;
+        }
         sendLoginOk(c);
+        tryReattachOrphan(c);
         return;
     }
     if (type == proto::kT_Logout) {
         leaveMatchOrQueue(c, true);
         c.loggedIn = false; c.userId = 0; c.username.clear(); c.team.clear();
-        c.udpToken.clear(); c.udpKnown = false;
+        c.udpToken.clear(); c.udpHmacKey.clear(); c.udpKnown = false;
         sendToClient(c, proto::encodeLine({proto::kT_Ok, "logout"}));
         return;
     }
@@ -982,11 +1072,41 @@ void Server::dispatchTcp(Client& c, const std::string& line) {
     sendToClient(c, proto::encodeLine({proto::kT_Err, std::string("unknown message: ") + type}));
 }
 int Server::run() {
+    ready_.store(false);
     if (!bindSockets()) return 1;
     std::cerr << "claudegame_server v" << kServerVersion
               << " team_size=" << cfg_.teamSize
               << " db=" << cfg_.dbPath << std::endl;
+    {
+        std::string certDir = cg::userDataDir();
+        std::string certPath = certDir + "/server.crt";
+        std::string keyPath  = certDir + "/server.key";
+        std::string certPem, keyPem;
+        auto slurp = [](const std::string& p, std::string& out) {
+            std::ifstream f(p, std::ios::binary);
+            if (!f.good()) return false;
+            out.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            return !out.empty();
+        };
+        if (!(slurp(certPath, certPem) && slurp(keyPath, keyPem))) {
+            std::cerr << "[tls] generating new self-signed cert at " << certPath << std::endl;
+            std::string err;
+            if (!tls::generateSelfSignedCert("claudegame-server", certPem, keyPem, err)) {
+                std::cerr << "[tls] cert generation failed: " << err << std::endl;
+                return 1;
+            }
+            std::ofstream(certPath, std::ios::binary).write(certPem.data(), certPem.size());
+            std::ofstream(keyPath,  std::ios::binary).write(keyPem.data(),  keyPem.size());
+        }
+        std::string err;
+        if (!tlsCtx_.initServer(certPem, keyPem, err)) {
+            std::cerr << "[tls] context init failed: " << err << std::endl;
+            return 1;
+        }
+        std::cerr << "[tls] cert fingerprint sha256=" << tls::certFingerprintHex(certPem) << std::endl;
+    }
     std::cerr << "listening on " << cfg_.host << ":" << cfg_.port << std::endl;
+    ready_.store(true);
     long long nextTick = nowMillis();
     const long long tickMs = 1000 / proto::kTickRate;
     while (!stop_) {
@@ -1036,6 +1156,7 @@ int Server::run() {
         now = nowMillis();
         enforceIdleDisconnects(now);
         maybeBotFillTimeout(now);
+        expireOrphans(now);
         if (now >= nextTick) {
             tickMatches();
             nextTick += tickMs;
@@ -1043,6 +1164,7 @@ int Server::run() {
         }
     }
     std::cerr << "[srv] shutting down" << std::endl;
+    ready_.store(false);
     closeSockets();
     return 0;
 }

@@ -147,7 +147,7 @@ Defined in `include/Protocol.h`. Newline-delimited messages on TCP, datagrams on
 Examples:
 ```
 HELLO|1|30|5
-LOGIN|alice|hunter2
+LOGIN|alice|<64-char-hex-pbkdf2-proof>
 LOGIN_OK|1|alice|BLUE|0|1|0|0|0|0|0|e099b384000a00d0
 CHAT_SEND|public|hello%20world
 CHAT_MSG|public|alice|hello world|1779013677
@@ -169,7 +169,7 @@ chat_messages  (id, room, user_id, username, content, sent_at)
 user_weapons   (user_id, weapon_id)  -- owned inventory
 ```
 
-Passwords: salted SHA-256 via OpenSSL EVP, 16-byte `RAND_bytes` salt. All queries parameterized.
+Passwords: client sends `PBKDF2-SHA256(password, "claudegame|" + lowercase(username), 50000)` as hex; server stores `PBKDF2-SHA256(that_proof, random_16_byte_salt, 100000)` as hex. Per-user salt from `RAND_bytes` / `SecRandomCopyBytes`. All queries parameterized.
 
 ## Project layout
 
@@ -192,13 +192,44 @@ claudegame/
 └── data/                             ← server.sqlite at runtime
 ```
 
-## Caveats — this is a game, not a service
+## Security & anti-cheat
 
-- No TLS. Passwords cross the wire in cleartext.
-- No PBKDF2/argon2 key stretching — SHA-256 with a salt only.
-- No rate limiting, no anti-cheat (the server is authoritative for hits, but doesn't validate movement speed).
-- UDP packets have no auth beyond the per-session `udp_token`. Trivially spoofable on a local network.
-- No reconnect into a running match — if your TCP drops, the match continues without you.
+### Transport
+- **TLS 1.2/1.3 on the TCP channel**. mbedTLS 3.6 is vendored under `third_party/mbedtls/` and linked statically — no system OpenSSL dependency. The server auto-generates an RSA-2048 self-signed cert + key on first run, stored in the user data dir (`~/Library/Application Support/ClaudeGame/server.{crt,key}` on macOS) and reused on subsequent starts. SHA-256 cert fingerprint is printed to stderr at startup; you can share it with players for out-of-band verification. Negotiated suite is typically ECDHE-RSA + AES-256-GCM or CHACHA20-POLY1305.
+- **Client verification is currently permissive** — accepts any cert. `NetClient::tlsFingerprint` exposes the live SHA-256 fingerprint of whatever the server presented, so a UI layer can do TOFU / pinning (not wired into the connect screen yet).
+
+### Authentication
+- **Two-stage PBKDF2-SHA256**. Client derives `PBKDF2(password, "claudegame|" + lowercase(username), 50000)` before sending. Server stores `PBKDF2(derived, random_salt, 100000)`. The plaintext password never leaves the client.
+- **Login throttle** — 5 failed logins per username in 60 s → 60 s lockout.
+
+### UDP packet integrity
+- **Per-session HMAC-SHA256**. Server issues a fresh 32-byte key on each login (delivered via TCP). Client signs every UDP INPUT; server verifies. Forged or replayed UDP from any source (same IP or otherwise) is rejected. A bad-HMAC streak of 5 auto-disconnects the client.
+- **UDP source-IP pin** — INPUT must come from the same IP as the owning TCP socket.
+
+### Match integrity
+- **PVS visibility filter** — `STATE` packets omit enemies you can't legitimately see (head *and* chest line-of-sight blocked). The client never receives positions it isn't allowed to render. Anti-wallhack.
+- **Server-authoritative simulation** — movement capped by 30 Hz tick × 6 m/s regardless of input rate; fire rate enforced by per-weapon cooldown; hits decided by server raycasts.
+- **Input sanity** — NaN/Inf rejected; move clamped to unit circle; pitch clamped to ±1.55 rad; old/future tick numbers dropped (anti-replay).
+- **Reconnect into a running match** — if your TCP drops, your match slot is preserved for 30 s; re-login within that window and the server emits `RECONNECTED` + resends `MATCH_START` and reattaches you. After 30 s the slot forfeits.
+
+### Behavioural heuristics (log + auto-disconnect at threshold)
+- **Aim-snap detection** — |Δyaw| > 2.8 rad between consecutive inputs counted. Logs at 25/match; auto-kicks at 60.
+- **Headshot streak** — logs at 5 and 10 consecutive HS kills.
+- **Stat sanity** — at match end, ≥10 kills with ≥90 % HS ratio is logged.
+
+### Hardening
+- **Rate limits** — 20 TCP msgs/sec/client, 90 UDP/sec/client. TCP excess > 4× kicks. UDP excess streak of 5 kicks.
+- **Per-IP caps** — 8 concurrent connections per IP; 5 account registrations per IP per hour (loopback exempt).
+- **Username charset** — `[A-Za-z0-9_.\-]` only.
+- **Chat** — 0.5 s min interval, 200-char cap, no whitespace-only.
+- **Idle disconnects** — close if no LOGIN within 30 s of connect, or no INPUT within 30 s while in a match.
+- **Suspicion bitfield** — 15-bit flag set logged on every disconnect for forensic review.
+
+## Remaining caveats
+
+- **Self-signed cert + no pinning UI yet.** TLS prevents passive sniffing and prevents MITM if the player verifies the fingerprint out of band, but the client UI doesn't yet display the fingerprint or remember it across connects. A first-connect MITM against an unverified server is still possible. Wire `NetClient::tlsFingerprint` into the ConnectScreen to fix.
+- **PBKDF2 iteration count is fixed** at 100,000. Reasonable for 2026 hardware but no Argon2 / scrypt option.
+- **The anti-cheat is heuristic.** It logs every suspicious event and auto-disconnects beyond hard thresholds. There is no DB-level ban; a determined attacker can reconnect with the same account after a kick.
 
 Don't reuse real passwords. Don't run on a hostile network without putting it behind a firewall.
 

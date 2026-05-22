@@ -1,5 +1,7 @@
 #include "PlatformNet.h"
 #include "NetClient.h"
+#include "Crypto.h"
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -77,9 +79,27 @@ bool NetClient::connect(const std::string& host, uint16_t port, std::string& err
     tcpSendBuf_.clear();
     tcpInbox_.clear();
     udpInbox_.clear();
+    tlsCtx_ = std::make_unique<TlsContext>();
+    std::string terr;
+    if (!tlsCtx_->initClient(terr)) {
+        errOut = std::string("tls init: ") + terr;
+        disconnect();
+        return false;
+    }
+    tls_ = std::make_unique<TlsConn>();
+    if (!tls_->attach(*tlsCtx_, /*isServer=*/false, (std::uintptr_t)tcpFd_, terr)) {
+        errOut = std::string("tls attach: ") + terr;
+        disconnect();
+        return false;
+    }
+    tlsReady_ = false;
     return true;
 }
 void NetClient::disconnect() {
+    if (tls_) { tls_->close(); tls_.reset(); }
+    tlsCtx_.reset();
+    tlsReady_ = false;
+    tlsFingerprint.clear();
     if (tcpFd_ != CG_INVALID_SOCKET) { cg_close(tcpFd_); tcpFd_ = CG_INVALID_SOCKET; }
     if (udpFd_ != CG_INVALID_SOCKET) { cg_close(udpFd_); udpFd_ = CG_INVALID_SOCKET; }
     tcpRecvBuf_.clear();
@@ -89,16 +109,15 @@ void NetClient::disconnect() {
     loggedIn = false;
 }
 void NetClient::tryFlushTcp() {
-    if (tcpFd_ == CG_INVALID_SOCKET || tcpSendBuf_.empty()) return;
+    if (tcpFd_ == CG_INVALID_SOCKET || !tls_) return;
+    if (!tlsReady_) return;
     while (!tcpSendBuf_.empty()) {
-        cg_ssize_t n = ::send(tcpFd_, tcpSendBuf_.data(), (int)tcpSendBuf_.size(), 0);
-        if (n > 0) {
-            tcpSendBuf_.erase(0, (size_t)n);
-        } else if (n == CG_SOCKET_ERROR) {
-            int e = cg_lasterr();
-            if (e == CG_EAGAIN || e == CG_EWOULDBLOCK) break;
-            disconnect();
-            return;
+        std::size_t wrote = 0;
+        TlsConn::Status st = tls_->write(tcpSendBuf_.data(), tcpSendBuf_.size(), wrote);
+        if (st == TlsConn::Status::Ok && wrote > 0) {
+            tcpSendBuf_.erase(0, wrote);
+        } else if (st == TlsConn::Status::WantRead || st == TlsConn::Status::WantWrite) {
+            break;
         } else {
             disconnect();
             return;
@@ -106,20 +125,29 @@ void NetClient::tryFlushTcp() {
     }
 }
 void NetClient::poll() {
-    if (tcpFd_ == CG_INVALID_SOCKET) return;
+    if (tcpFd_ == CG_INVALID_SOCKET || !tls_) return;
+    if (!tlsReady_) {
+        TlsConn::Status st = tls_->handshake();
+        if (st == TlsConn::Status::Ok) {
+            tlsReady_ = true;
+            tlsFingerprint = tls_->peerCertFingerprintHex();
+        } else if (st == TlsConn::Status::WantRead || st == TlsConn::Status::WantWrite) {
+            return;
+        } else {
+            disconnect();
+            return;
+        }
+    }
     tryFlushTcp();
     char buf[4096];
     while (true) {
-        cg_ssize_t n = ::recv(tcpFd_, buf, sizeof(buf), 0);
-        if (n > 0) {
-            tcpRecvBuf_.append(buf, (size_t)n);
-        } else if (n == 0) {
-            disconnect();
-            return;
+        std::size_t got = 0;
+        TlsConn::Status st = tls_->read(buf, sizeof(buf), got);
+        if (st == TlsConn::Status::Ok && got > 0) {
+            tcpRecvBuf_.append(buf, got);
+        } else if (st == TlsConn::Status::WantRead || st == TlsConn::Status::WantWrite) {
+            break;
         } else {
-            int e = cg_lasterr();
-            if (e == CG_EAGAIN || e == CG_EWOULDBLOCK) break;
-            if (e == CG_EINTR) continue;
             disconnect();
             return;
         }
@@ -165,14 +193,46 @@ void NetClient::sendTcp(const std::vector<std::string>& fields) {
     if (tcpFd_ == CG_INVALID_SOCKET) return;
     std::string line = proto::encodeLine(fields);
     line.push_back('\n');
+    if (tcpSendBuf_.size() + line.size() > kMaxTcpSendBuf) {
+        disconnect();
+        return;
+    }
     tcpSendBuf_.append(line);
     tryFlushTcp();
 }
 void NetClient::sendUdp(const std::vector<std::string>& fields) {
     if (udpFd_ == CG_INVALID_SOCKET) return;
-    std::string dg = proto::encodeLine(fields);
-    cg_ssize_t n = ::send(udpFd_, dg.data(), (int)dg.size(), 0);
-    (void)n;
+    std::vector<std::string> signedFields = fields;
+    if (!udpHmacKey.empty() && !fields.empty() && fields[0] == proto::kU_Input) {
+        std::string body = proto::encodeLine(signedFields);
+        std::string tag = cg::hmacSha256Hex(udpHmacKey, body);
+        if (tag.empty()) return;
+        signedFields.push_back(tag);
+    }
+    std::string dg = proto::encodeLine(signedFields);
+    std::size_t sent = 0;
+    while (sent < dg.size()) {
+        cg_ssize_t n = ::send(udpFd_, dg.data() + sent, (int)(dg.size() - sent), 0);
+        if (n > 0) {
+            sent += (std::size_t)n;
+        } else {
+            int e = cg_lasterr();
+            if (n == 0) return;
+            if (e == CG_EAGAIN || e == CG_EWOULDBLOCK || e == CG_EINTR) continue;
+            return;
+        }
+    }
+}
+std::string NetClient::derivePassword(const std::string& username, const std::string& password) {
+    std::string lo = username;
+    for (auto& c : lo) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    return cg::pbkdf2Sha256Hex(password, std::string("claudegame|") + lo, 50000, 32);
+}
+void NetClient::sendRegister(const std::string& user, const std::string& pass) {
+    sendTcp({ proto::kT_Register, user, derivePassword(user, pass) });
+}
+void NetClient::sendLogin(const std::string& user, const std::string& pass) {
+    sendTcp({ proto::kT_Login, user, derivePassword(user, pass) });
 }
 std::vector<std::vector<std::string>> NetClient::drainTcp() {
     std::vector<std::vector<std::string>> out;
@@ -209,5 +269,6 @@ void NetClient::parseLoginOkIfPresent(const std::vector<std::string>& msg) {
     credits        = (msg.size() >= 13) ? std::atoi(msg[12].c_str()) : 0;
     selectedWeapon = (msg.size() >= 14) ? std::atoi(msg[13].c_str()) : proto::kWeaponPistol;
     if (selectedWeapon < 1 || selectedWeapon > proto::kWeaponCount) selectedWeapon = proto::kWeaponPistol;
+    udpHmacKey     = (msg.size() >= 15) ? msg[14] : std::string();
     loggedIn       = true;
 }

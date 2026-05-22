@@ -3,7 +3,7 @@
 #include "I18n.h"
 #include <algorithm>
 #include <raylib.h>
-SoloMenu::SoloMenu(NetClient& net) : net_(net) {}
+SoloMenu::SoloMenu(NetClient& /*net*/) {}
 namespace {
 bool drawBigButton(const char* text, int x, int y, int w, int h, Color base) {
     Vector2 mp = GetMousePosition();

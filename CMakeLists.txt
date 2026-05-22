@@ -11,9 +11,18 @@ project(claudegame C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
 if(NOT WIN32 AND NOT APPLE)
     find_package(OpenSSL REQUIRED)
 endif()
+set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(USE_STATIC_MBEDTLS_LIBRARY ON CACHE BOOL "" FORCE)
+set(USE_SHARED_MBEDTLS_LIBRARY OFF CACHE BOOL "" FORCE)
+set(MBEDTLS_FATAL_WARNINGS OFF CACHE BOOL "" FORCE)
+add_subdirectory(third_party/mbedtls EXCLUDE_FROM_ALL)
 if(WIN32)
     set(_CG_BUNDLED_RAYLIB_ROOTS
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/raylib/raylib-5.5_win64_mingw-w64
@@ -72,6 +81,7 @@ set(CG_CLIENT_SOURCES
     src/Bot.cpp
     src/Crypto.cpp
     src/Paths.cpp
+    src/TlsConn.cpp
     src/EmbeddedServer.cpp
     server/Server.cpp
     server/Match.cpp
@@ -85,6 +95,7 @@ set(CG_SERVER_SOURCES
     src/Maps.cpp
     src/Crypto.cpp
     src/Paths.cpp
+    src/TlsConn.cpp
 )
 if(WIN32 AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sqlite/sqlite3.c)
     list(APPEND CG_CLIENT_SOURCES third_party/sqlite/sqlite3.c)
@@ -122,7 +133,9 @@ endif()
 target_include_directories(claudegame PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/server
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/mbedtls/include
 )
+target_link_libraries(claudegame PRIVATE mbedtls mbedx509 mbedcrypto)
 if(NOT CG_BUNDLED_SQLITE)
     target_link_libraries(claudegame PRIVATE sqlite3)
 else()
@@ -143,6 +156,7 @@ if(APPLE)
         "-framework IOKit"
         "-framework CoreVideo"
         "-framework OpenGL"
+        "-framework Security"
     )
 elseif(WIN32)
     target_link_libraries(claudegame PRIVATE
@@ -156,7 +170,9 @@ add_executable(claudegame_server ${CG_SERVER_SOURCES})
 target_include_directories(claudegame_server PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/server
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/mbedtls/include
 )
+target_link_libraries(claudegame_server PRIVATE mbedtls mbedx509 mbedcrypto)
 if(NOT CG_BUNDLED_SQLITE)
     target_link_libraries(claudegame_server PRIVATE sqlite3)
 else()
@@ -165,7 +181,9 @@ endif()
 if(NOT WIN32 AND NOT APPLE)
     target_link_libraries(claudegame_server PRIVATE OpenSSL::Crypto)
 endif()
-if(WIN32)
+if(APPLE)
+    target_link_libraries(claudegame_server PRIVATE "-framework Security")
+elseif(WIN32)
     target_link_libraries(claudegame_server PRIVATE ws2_32 crypt32 bcrypt)
     if(MINGW)
         target_link_options(claudegame_server PRIVATE -static-libgcc -static-libstdc++)

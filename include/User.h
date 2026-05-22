@@ -13,4 +13,6 @@ struct User {
     int matchesPlayed = 0;
     int matchesWon = 0;
     std::string team;
+    int credits = 500;
+    int selectedWeapon = 1;
 };

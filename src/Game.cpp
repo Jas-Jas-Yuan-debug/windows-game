@@ -64,11 +64,14 @@ void Game::applyStatePayload(const std::vector<std::string>& m) {
     timeLeftMs_   = std::atoi(m[11].c_str());
     selfWeaponId_ = std::atoi(m[12].c_str());
     int count     = std::atoi(m[13].c_str());
-    (void)count;
+    if (count < 0) count = 0;
+    if (count > proto::kMaxStatePlayers) count = proto::kMaxStatePlayers;
     players_.clear();
+    players_.reserve((size_t)count);
     const std::string& list = m[14];
     size_t pos = 0;
-    while (pos <= list.size()) {
+    int parsed = 0;
+    while (pos <= list.size() && parsed < count) {
         size_t sep = list.find(';', pos);
         std::string token = list.substr(pos, sep == std::string::npos ? std::string::npos : sep - pos);
         if (sep == std::string::npos) pos = list.size() + 1;
@@ -95,8 +98,12 @@ void Game::applyStatePayload(const std::vector<std::string>& m) {
         pe.team  = parts[6];
         pe.alive = parts[7] != "0";
         pe.uid   = std::atoi(parts[8].c_str());
-        pe.name  = parts[9];
+        pe.name  = proto::urlDecode(parts[9]);
         players_.push_back(std::move(pe));
+        ++parsed;
+    }
+    if (selfWeaponId_ < 1 || selfWeaponId_ > proto::kWeaponCount) {
+        selfWeaponId_ = proto::kWeaponPistol;
     }
 }
 void Game::handleTcp(const std::vector<std::string>& m) {

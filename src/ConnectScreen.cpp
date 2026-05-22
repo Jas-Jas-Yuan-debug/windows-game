@@ -89,6 +89,7 @@ bool ConnectScreen::run() {
     Color statusColor = LIGHTGRAY;
     bool connecting = false;
     double connectStarted = 0.0;
+    double connectDeadline = 0.0;
     bool connectedAndHello = false;
     bool quit = false;
     while (!WindowShouldClose() && !connectedAndHello && !quit) {
@@ -159,30 +160,67 @@ bool ConnectScreen::run() {
                     statusKey = "connect.err.invalidport";
                     statusColor = RED;
                 } else if (!net_.connect(host_, (uint16_t)p, err)) {
-                    statusKey = "connect.err.connfail";
-                    status = std::string(i18n::tr(statusKey.c_str())) + err;
                     statusKey.clear();
+                    status = std::string(i18n::tr("connect.err.connfail")) + err;
                     statusColor = RED;
                 } else {
                     statusKey = "connect.status.connecting";
                     statusColor = SKYBLUE;
                     connecting = true;
                     connectStarted = GetTime();
+                    connectDeadline = 0.0;
                 }
             }
         }
         if (connecting) {
+            const bool waitEmbedded =
+                embedded_ && host_ == "127.0.0.1" && embedded_->isRunning() && !embedded_->isReady();
+            if (waitEmbedded) {
+                statusKey.clear();
+                status = "Starting local server...";
+                statusColor = SKYBLUE;
+            } else if (connectDeadline <= 0.0) {
+                const double waitSec = (embedded_ && host_ == "127.0.0.1") ? 15.0 : 8.0;
+                connectDeadline = GetTime() + waitSec;
+            }
             net_.poll();
+            if (net_.tlsFingerprint.empty()) {
+                /* wait for handshake */
+            } else {
+                std::string pinned = cg::loadTlsPinForHost(host_);
+                if (!pinned.empty() && pinned != net_.tlsFingerprint) {
+                    net_.disconnect();
+                    connecting = false;
+                    statusKey.clear();
+                    status = "TLS certificate changed (pin mismatch)";
+                    statusColor = RED;
+                }
+            }
             auto msgs = net_.drainTcp();
             for (auto& m : msgs) {
                 if (!m.empty() && m[0] == proto::kT_Hello) {
+                    if (!net_.tlsFingerprint.empty()) {
+                        std::string pinned = cg::loadTlsPinForHost(host_);
+                        if (pinned.empty()) {
+                            cg::saveTlsPinForHost(host_, net_.tlsFingerprint);
+                        } else if (pinned != net_.tlsFingerprint) {
+                            net_.disconnect();
+                            connecting = false;
+                            statusKey.clear();
+                            status = "TLS certificate changed (pin mismatch)";
+                            statusColor = RED;
+                            break;
+                        }
+                    }
                     connectedAndHello = true;
                     break;
                 }
             }
-            if (!connectedAndHello && (GetTime() - connectStarted > 3.0)) {
+            if (!connectedAndHello && !waitEmbedded && connectDeadline > 0.0 &&
+                GetTime() > connectDeadline) {
                 net_.disconnect();
                 connecting = false;
+                connectDeadline = 0.0;
                 statusKey = "connect.status.timeout";
                 statusColor = RED;
             }
