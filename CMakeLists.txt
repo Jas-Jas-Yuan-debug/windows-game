@@ -121,8 +121,8 @@ if(APPLE)
     set_target_properties(claudegame PROPERTIES
         OUTPUT_NAME "ClaudeGame"
         MACOSX_BUNDLE_BUNDLE_NAME "ClaudeGame"
-        MACOSX_BUNDLE_BUNDLE_VERSION "1.0.0"
-        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0"
+        MACOSX_BUNDLE_BUNDLE_VERSION "2.0.0"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "2.0"
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.jonzhu.claudegame"
         MACOSX_BUNDLE_COPYRIGHT "© 2026 jonzhu"
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/mac/Info.plist.in"
