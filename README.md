@@ -26,62 +26,73 @@ If your antivirus quarantines `claudegame.exe`, add the unzipped folder to its e
 
 ## Build
 
-```bash
-xcode-select --install      # if you don't already have Xcode CLI tools
-brew install cmake          # the only tool Apple doesn't ship
-cd claudegame
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=/usr/bin/clang++
-cmake --build build -j
+Two supported paths on Windows. **MSVC + vcpkg** is the standard Microsoft toolchain; **MinGW-w64 via MSYS2** is the GCC route (also what the cross-compile script targets). The only external dependency is **raylib** — mbedTLS is vendored under `third_party/mbedtls/` and built automatically, and SQLite is the bundled amalgamation under `third_party/sqlite/`.
+
+### MSVC + vcpkg (recommended)
+
+Requirements: Visual Studio 2022 with "Desktop development with C++", [CMake](https://cmake.org/download/) on PATH, and [vcpkg](https://github.com/microsoft/vcpkg).
+
+From a Developer Command Prompt:
+
+```bat
+git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+C:\vcpkg\bootstrap-vcpkg.bat
+set VCPKG_ROOT=C:\vcpkg
+%VCPKG_ROOT%\vcpkg install raylib --triplet x64-windows
+cd path\to\claudegamewindows
+windows\build-msvc.bat
 ```
 
-raylib is bundled (`third_party/raylib-mac/libraylib.a`, universal arm64+x86_64), SQLite is the system `libsqlite3.dylib`, and password hashing uses macOS **CommonCrypto** — so no Homebrew packages beyond `cmake` are needed. On Linux you still need `libsqlite3-dev` + `libssl-dev` + a system raylib.
+Output: `build-msvc\Release\claudegame.exe` and `build-msvc\Release\claudegame_server.exe`.
 
-Produces two binaries:
-- `build/claudegame_server` — the server (no graphics)
-- `build/claudegame` — the raylib client
+### MinGW-w64 via MSYS2
 
-For a release-ready universal `.app` bundle (with Info.plist + icon + entitlements wired up):
+Requirements: [MSYS2](https://www.msys2.org/). From the **MSYS2 MINGW64** shell:
 
 ```bash
-bash mac/build-mac-app.sh
+pacman -S --needed mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake \
+                   mingw-w64-x86_64-raylib
+cd /c/path/to/claudegamewindows
+cmake -S . -B build-mingw -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
+cmake --build build-mingw -j
 ```
 
-Output: `build-mac/ClaudeGame.app`. The script preflight-checks `clang++`, `git`, and `cmake` and prints install hints if any are missing.
+Output: `build-mingw\claudegame.exe` and `build-mingw\claudegame_server.exe`.
+
+### Cross-compile from a Mac (advanced)
+
+`windows\cross-build-from-mac.sh` uses a MinGW-w64 toolchain on macOS to produce the Windows binaries. Output lands in `build-cross-win64\`. Needs prebuilt MinGW raylib + the SQLite amalgamation under `third_party/`.
 
 ## Running
 
 ### Start a server
 
-```bash
-./build/claudegame_server                              # defaults: 0.0.0.0:27015, 5v5, data/server.sqlite
-./build/claudegame_server --port 27017 --team-size 1   # 1v1 for testing
-./build/claudegame_server --host 0.0.0.0 --port 27015 --team-size 5 --db data/server.sqlite
+From `cmd.exe` or PowerShell in the build folder:
+
+```bat
+claudegame_server.exe                                  REM defaults: 0.0.0.0:27015, 5v5
+claudegame_server.exe --port 27017 --team-size 1       REM 1v1 for testing
+claudegame_server.exe --host 0.0.0.0 --port 27015 --team-size 5 --db data\server.sqlite
 ```
 
-The server binds **both TCP and UDP** on the same port. It prints `listening on host:port` once ready. Ctrl-C exits cleanly.
+The server binds **both TCP and UDP** on the same port. It prints `listening on host:port` once ready. The SQLite DB and the TLS cert/key land under `%APPDATA%\ClaudeGame\`. Ctrl-C exits cleanly.
 
 ### Connect a client
 
-```bash
-./build/claudegame
-```
-
-You'll see a connect screen — type the server's host (default `127.0.0.1`) and port (default `27015`) and hit CONNECT. Or click **HOST LOCAL GAME** to spawn an in-process server on `127.0.0.1:27015` (DB lands in `~/Library/Application Support/ClaudeGame/`).
-
-### Running on a clean Mac
-
-`build-mac/ClaudeGame.app` is a fully self-contained universal (arm64 + x86_64) bundle: it links only to system libraries (`libsqlite3`, `libc++`, Cocoa/IOKit/OpenGL frameworks) and ships its own fonts and icon. You can copy the `.app` to any macOS 11.0+ machine and double-click it — no Homebrew, no Xcode, no raylib install required.
-
-**Gatekeeper on first launch:** because the bundle is not (yet) signed with an Apple Developer ID, the first launch on someone else's Mac will pop *"ClaudeGame cannot be opened because Apple cannot check it for malicious software."* Workaround: right-click the `.app` → **Open** → confirm. After that one-time confirmation the user can launch normally. Proper fix: sign with `codesign --options runtime --entitlements mac/ClaudeGame.entitlements --sign "Developer ID Application: …"` before distributing — see the closing block of `mac/build-mac-app.sh` for the full command list.
+Double-click `claudegame.exe`, or run it from the terminal. You'll see a connect screen — type the server's host (default `127.0.0.1`) and port (default `27015`) and hit CONNECT. Or click **HOST LOCAL GAME** to spawn an in-process server on `127.0.0.1:27015`.
 
 ### Hosting on the public internet
 
 The server binds `0.0.0.0` by default, so it accepts external connections — but your network has to actually deliver them. Standard checklist:
 
-1. **Open the port** in your firewall (e.g. `sudo pfctl` rules on macOS, `ufw allow 27015` on Linux). TCP **and** UDP on the same port.
+1. **Allow the port** in Windows Defender Firewall. The first time `claudegame_server.exe` binds, Windows will prompt for permission — tick both Private and Public networks. To allow it manually:
+   ```powershell
+   New-NetFirewallRule -DisplayName "ClaudeGame TCP" -Direction Inbound -Protocol TCP -LocalPort 27015 -Action Allow
+   New-NetFirewallRule -DisplayName "ClaudeGame UDP" -Direction Inbound -Protocol UDP -LocalPort 27015 -Action Allow
+   ```
 2. **Forward the port** on your router to your machine's LAN IP if you're behind NAT.
-3. **Find your public IP** (`curl ifconfig.me`) and give that + the port to your friends.
-4. There is **no TLS** and **no authentication beyond the username/password**. Don't host this on a sensitive network or reuse real passwords.
+3. **Find your public IP** (e.g. via [ifconfig.me](https://ifconfig.me)) and give that + the port to your friends.
+4. Connections are **TLS-encrypted** and passwords are PBKDF2-hashed end to end — but the server's TLS cert is **self-signed**, so out-of-band fingerprint verification is still on you. The server prints the fingerprint to stderr at startup.
 
 ## Game flow
 
