@@ -13,36 +13,16 @@ If you just want to play, you don't have to compile anything.
 1. **Open GitHub** in a browser: <https://github.com/Jas-Jas-Yuan-debug/windows-game>
    (Or go to <https://github.com> and search the top bar for `windows-game` — pick the one owned by `Jas-Jas-Yuan-debug`.)
 2. On the right side of the repo page, click **Releases** (or open `https://github.com/Jas-Jas-Yuan-debug/windows-game/releases`). If there is no Releases section, scroll down to the project's `downloads/` folder and click the file directly.
-3. Download the package for your OS:
-   - macOS → `ClaudeGame-mac.dmg` (universal — works on Apple Silicon and Intel)
-   - Windows → `ClaudeGame-windows.zip`
-4. Install:
-   - **macOS:** double-click the `.dmg`, then drag `ClaudeGame.app` into `/Applications`.
-   - **Windows:** unzip anywhere and double-click `claudegame.exe`.
+3. Download `ClaudeGame-windows.zip`.
+4. Unzip it anywhere (Desktop, Downloads, wherever) and double-click `claudegame.exe`.
 
-### macOS: the Apple security warning on first launch
+### Windows SmartScreen on first launch
 
-The first time you open `ClaudeGame.app` macOS will show one of these dialogs:
+Because the binary isn't signed with a paid Microsoft / EV cert, Windows Defender SmartScreen may show a blue dialog: *"Windows protected your PC"*. Click **More info**, then the **Run anyway** button that appears underneath. You only have to do this once — after the first run Windows whitelists the file.
 
-> *"ClaudeGame" cannot be opened because Apple cannot check it for malicious software.*
+If your antivirus quarantines `claudegame.exe`, add the unzipped folder to its exclusion list. The binary is just a raylib client + statically-linked mbedTLS / SQLite — nothing that should trip a real scanner.
 
-or, on newer macOS:
-
-> *应用程序 "ClaudeGame" 无法打开。* &nbsp;(with only an **OK / 好** button — no "Open" option)
-
-This is **Gatekeeper**. The app isn't signed with a paid Apple Developer ID, so macOS quarantines it on download. The reliable way to clear it (works on every macOS version including the strict newer ones) is one Terminal command:
-
-```bash
-xattr -dr com.apple.quarantine /Applications/ClaudeGame.app
-```
-
-(If you didn't drag the app into `/Applications`, replace the path — e.g. `~/Downloads/ClaudeGame.app`.) After running it, double-click `ClaudeGame.app` normally — no more warning.
-
-**Alternative** (no Terminal): open **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to the ClaudeGame entry. You'll have to enter your password. Older macOS additionally lets you right-click the `.app` → **Open** → confirm.
-
-**Don't double-click `claudegame_server`.** That file (if you see it in a build folder) is the headless game server — a Unix executable with no GUI, meant for terminal use only. macOS Finder will mis-detect it and try to open it in TextEdit, giving you a "Unicode (UTF-8) 不适用" error. Ignore it. `ClaudeGame.app` already runs an embedded server in-process when you click **HOST LOCAL GAME**.
-
-The app links only to libraries that ship with macOS itself (`libsqlite3`, `libc++`, Cocoa/IOKit/OpenGL) and bundles its own fonts and icon, so no Homebrew or Xcode install is needed to run it.
+**Don't double-click `claudegame_server.exe`** unless you specifically want to host a dedicated server. That's the headless game server, no GUI — running it just opens a console window that listens for network connections. For normal play, only run `claudegame.exe` and click **HOST LOCAL GAME** inside it; that spawns the server in-process.
 
 ## Build
 
