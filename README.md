@@ -22,18 +22,25 @@ If you just want to play, you don't have to compile anything.
 
 ### macOS: the Apple security warning on first launch
 
-The first time you open `ClaudeGame.app` macOS will show a dialog like:
+The first time you open `ClaudeGame.app` macOS will show one of these dialogs:
 
 > *"ClaudeGame" cannot be opened because Apple cannot check it for malicious software.*
 
-This is **Gatekeeper** — the app isn't signed with a paid Apple Developer ID, so macOS refuses the normal double-click on a freshly downloaded binary. To get past it once:
+or, on newer macOS:
 
-1. Open **Finder** and go to wherever `ClaudeGame.app` lives (usually `/Applications`).
-2. **Right-click** (or Control-click) `ClaudeGame.app` → choose **Open** from the menu.
-3. The dialog now offers an **Open** button — click it.
-4. macOS remembers your choice. From now on you can launch it normally with a double-click.
+> *应用程序 "ClaudeGame" 无法打开。* &nbsp;(with only an **OK / 好** button — no "Open" option)
 
-If the dialog has no Open button (newer macOS sometimes hides it), open **System Settings → Privacy & Security**, scroll to the bottom, and click **Open Anyway** next to the ClaudeGame entry. You'll have to enter your password.
+This is **Gatekeeper**. The app isn't signed with a paid Apple Developer ID, so macOS quarantines it on download. The reliable way to clear it (works on every macOS version including the strict newer ones) is one Terminal command:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/ClaudeGame.app
+```
+
+(If you didn't drag the app into `/Applications`, replace the path — e.g. `~/Downloads/ClaudeGame.app`.) After running it, double-click `ClaudeGame.app` normally — no more warning.
+
+**Alternative** (no Terminal): open **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to the ClaudeGame entry. You'll have to enter your password. Older macOS additionally lets you right-click the `.app` → **Open** → confirm.
+
+**Don't double-click `claudegame_server`.** That file (if you see it in a build folder) is the headless game server — a Unix executable with no GUI, meant for terminal use only. macOS Finder will mis-detect it and try to open it in TextEdit, giving you a "Unicode (UTF-8) 不适用" error. Ignore it. `ClaudeGame.app` already runs an embedded server in-process when you click **HOST LOCAL GAME**.
 
 The app links only to libraries that ship with macOS itself (`libsqlite3`, `libc++`, Cocoa/IOKit/OpenGL) and bundles its own fonts and icon, so no Homebrew or Xcode install is needed to run it.
 
