@@ -6,6 +6,37 @@ A Counter-Strike-style **5v5 team deathmatch** built as a real client/server mul
 - **Client** — thin raylib renderer. Sends inputs (UDP), receives state (UDP), uses TCP for login, chat, lobby, match metadata.
 - Two-player and up — no bots. Configurable per-team size from 1v1 to 5v5.
 
+## Download & install (no build required)
+
+If you just want to play, you don't have to compile anything.
+
+1. **Open GitHub** in a browser: <https://github.com/Jas-Jas-Yuan-debug/mac-game-by-claude-code>
+   (Or go to <https://github.com> and search the top bar for `mac-game-by-claude-code` — pick the `Jas-Jas-Yuan-debug` one.)
+2. On the right side of the repo page, click **Releases** (or open `https://github.com/Jas-Jas-Yuan-debug/mac-game-by-claude-code/releases`). If there is no Releases section, scroll down to the project's `downloads/` folder and click the file directly.
+3. Download the package for your OS:
+   - macOS → `ClaudeGame-mac.dmg` (universal — works on Apple Silicon and Intel)
+   - Windows → `ClaudeGame-windows.zip`
+4. Install:
+   - **macOS:** double-click the `.dmg`, then drag `ClaudeGame.app` into `/Applications`.
+   - **Windows:** unzip anywhere and double-click `claudegame.exe`.
+
+### macOS: the Apple security warning on first launch
+
+The first time you open `ClaudeGame.app` macOS will show a dialog like:
+
+> *"ClaudeGame" cannot be opened because Apple cannot check it for malicious software.*
+
+This is **Gatekeeper** — the app isn't signed with a paid Apple Developer ID, so macOS refuses the normal double-click on a freshly downloaded binary. To get past it once:
+
+1. Open **Finder** and go to wherever `ClaudeGame.app` lives (usually `/Applications`).
+2. **Right-click** (or Control-click) `ClaudeGame.app` → choose **Open** from the menu.
+3. The dialog now offers an **Open** button — click it.
+4. macOS remembers your choice. From now on you can launch it normally with a double-click.
+
+If the dialog has no Open button (newer macOS sometimes hides it), open **System Settings → Privacy & Security**, scroll to the bottom, and click **Open Anyway** next to the ClaudeGame entry. You'll have to enter your password.
+
+The app links only to libraries that ship with macOS itself (`libsqlite3`, `libc++`, Cocoa/IOKit/OpenGL) and bundles its own fonts and icon, so no Homebrew or Xcode install is needed to run it.
+
 ## Build
 
 ```bash
