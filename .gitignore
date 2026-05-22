@@ -16,3 +16,6 @@ obj/
 *.out
 *.exe
 *.app
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
