@@ -11,7 +11,7 @@ A Counter-Strike-style **5v5 team deathmatch** built as a real client/server mul
 If you just want to play, you don't have to compile anything.
 
 1. **Open GitHub** in a browser: <https://github.com/Jas-Jas-Yuan-debug/windows-game>
-   (Or go to <https://github.com> and search the top bar for `mac-game-by-claude-code` — pick the `Jas-Jas-Yuan-debug` one.)
+   (Or go to <https://github.com> and search the top bar for `windows-game` — pick the one owned by `Jas-Jas-Yuan-debug`.)
 2. On the right side of the repo page, click **Releases** (or open `https://github.com/Jas-Jas-Yuan-debug/windows-game/releases`). If there is no Releases section, scroll down to the project's `downloads/` folder and click the file directly.
 3. Download the package for your OS:
    - macOS → `ClaudeGame-mac.dmg` (universal — works on Apple Silicon and Intel)
