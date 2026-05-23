@@ -121,15 +121,115 @@ All UI text is rendered in **Inter** for English (loaded from `assets/Inter-Regu
 Every account starts with **500 credits** and the **Pistol**. Earn credits per match:
 `50 · kills + 50 · headshots + 200 (if won)`. Spend them in the Store to unlock weapons, then SELECT one as your loadout for future matches.
 
-| ID | Name    | Price | Body | Headshot | Mag | Reserve | Cooldown | Reload |
-| -- | ------- | ----- | ---- | -------- | --- | ------- | -------- | ------ |
-| 1  | Pistol  | free  | 25   | 75       | 12  | 48      | 0.40s    | 1.5s   |
-| 2  | SMG     | 400   | 18   | 54       | 30  | 90      | 0.09s    | 2.0s   |
-| 3  | Shotgun | 900   | 95   | 140      | 8   | 32      | 0.80s    | 2.6s   |
-| 4  | Rifle   | 1500  | 34   | 100      | 30  | 90      | 0.12s    | 2.2s   |
-| 5  | Sniper  | 2400  | 80   | 200      | 5   | 15      | 1.20s    | 3.0s   |
+Server is the source of truth for these stats (`include/Weapon.h` for guns, `include/Throwable.h` for throwables). Damage at the muzzle; bullets *slow down* in flight (real Newton drag — see "Ballistics" below) so a far hit does less.
 
-Server is the source of truth for these stats (`include/Weapon.h`).
+### Guns (19 total)
+
+**Originals (IDs 1–5)** — the starter five, unchanged:
+
+| ID | Name    | Caliber | Price | Body | HS  | Mag | Reserve | Cooldown | Reload |
+| -- | ------- | ------- | ----- | ---- | --- | --- | ------- | -------- | ------ |
+| 1  | Pistol  | 9mm     | free  | 25   | 75  | 12  | 48      | 0.40s    | 1.5s   |
+| 2  | SMG     | 9mm     | 400   | 18   | 54  | 30  | 90      | 0.09s    | 2.0s   |
+| 3  | Shotgun | 12ga    | 900   | 95   | 140 | 8   | 32      | 0.80s    | 2.6s   |
+| 4  | Rifle   | 5.56mm  | 1500  | 34   | 100 | 30  | 90      | 0.12s    | 2.2s   |
+| 5  | Sniper  | 7.62mm  | 2400  | 80   | 200 | 5   | 15      | 1.20s    | 3.0s   |
+
+**12.7 mm anti-materiel (IDs 6–8)** — extreme damage, slow fire, massive recoil:
+
+| ID | Name             | Price | Body | HS  | Mag | Reserve | Cooldown | Reload | Muzzle |
+| -- | ---------------- | ----- | ---- | --- | --- | ------- | -------- | ------ | ------ |
+| 6  | Barrett M82      | 5000  | 180  | 350 | 10  | 30      | 1.50s    | 4.0s   | 855 m/s |
+| 7  | McMillan TAC-50  | 7000  | 220  | 400 | 5   | 20      | 1.90s    | 4.5s   | 860 m/s |
+| 8  | NTW-20           | 9000  | 280  | 500 | 3   | 12      | 2.40s    | 5.0s   | 720 m/s |
+
+**7.62 mm battle rifle / DMR (IDs 9–11)** — high damage, moderate fire rate:
+
+| ID | Name           | Price | Body | HS  | Mag | Reserve | Cooldown | Reload | Muzzle  |
+| -- | -------------- | ----- | ---- | --- | --- | ------- | -------- | ------ | ------- |
+| 9  | **AK-47**      | 2500  | 45   | 130 | 30  | 90      | 0.10s    | 2.5s   | 715 m/s |
+| 10 | SVD Dragunov   | 3200  | 72   | 175 | 10  | 30      | 0.50s    | 3.0s   | 830 m/s |
+| 11 | FN FAL         | 3500  | 55   | 150 | 20  | 60      | 0.13s    | 2.7s   | 840 m/s |
+
+**5.56 mm assault rifle (IDs 12–15)** — medium damage, fast fire:
+
+| ID | Name    | Price | Body | HS | Mag | Reserve | Cooldown | Reload | Muzzle  |
+| -- | ------- | ----- | ---- | -- | --- | ------- | -------- | ------ | ------- |
+| 12 | M4A1    | 1700  | 32   | 95 | 30  | 90      | 0.09s    | 2.1s   | 910 m/s |
+| 13 | M16A4   | 1600  | 35   | 100| 30  | 90      | 0.11s    | 2.2s   | 955 m/s |
+| 14 | SCAR-L  | 1900  | 34   | 98 | 30  | 90      | 0.10s    | 2.1s   | 870 m/s |
+| 15 | AUG A3  | 1850  | 33   | 96 | 30  | 90      | 0.09s    | 2.3s   | 940 m/s |
+
+**9 mm pistol / SMG (IDs 16–19)** — low damage, very fast or rapid fire:
+
+| ID | Name        | Price | Body | HS | Mag | Reserve | Cooldown | Reload | Muzzle  |
+| -- | ----------- | ----- | ---- | -- | --- | ------- | -------- | ------ | ------- |
+| 16 | Glock 17    | 200   | 22   | 66 | 17  | 51      | 0.18s    | 1.4s   | 375 m/s |
+| 17 | Beretta M9  | 250   | 23   | 68 | 15  | 45      | 0.20s    | 1.5s   | 380 m/s |
+| 18 | MP5         | 700   | 20   | 60 | 30  | 90      | 0.075s   | 2.0s   | 400 m/s |
+| 19 | P90         | 800   | 19   | 55 | 50  | 100     | 0.07s    | 2.2s   | 715 m/s |
+
+### Throwables (30 total)
+
+Press **G** for grenade, **F** for flashbang, **B** for bomb during a match. Default loadout = M67 / M84 / C4; per-player throwable inventory is in the Store UI but the equip pick currently defaults to those three (full equip wiring is TODO).
+
+**Grenades (IDs 100–109)** — fragmentation + smoke:
+
+| ID  | Name              | Price | Fuse | Radius | Damage | Notes |
+| --- | ----------------- | ----- | ---- | ------ | ------ | ----- |
+| 100 | M67 Fragmentation | 300   | 4.0s | 8 m    | 120    | US standard frag |
+| 101 | RGD-5             | 220   | 3.5s | 7 m    | 100    | Soviet WWII-era |
+| 102 | F1                | 250   | 4.0s | 9 m    | 140    | "Limonka" — heavy iron body |
+| 103 | Mk2 Pineapple     | 180   | 4.5s | 7.5 m  | 110    | US WWII pineapple |
+| 104 | M61               | 280   | 4.0s | 8.5 m  | 130    | Vietnam-era US frag |
+| 105 | RGO               | 320   | 3.0s | 10 m   | 160    | Russian impact (timed) |
+| 106 | V40 Mini          | 150   | 4.0s | 5 m    | 60     | Tiny Dutch mini |
+| 107 | RDG-2 Smoke       | 100   | 2.0s | 15 m   | 8      | **Smoke** — near-zero damage, LOS block |
+| 108 | M18 Smoke         | 120   | 1.8s | 14 m   | 5      | **Smoke** — colored variant |
+| 109 | Mk3A2 Concussion  | 400   | 4.0s | 12 m   | 200    | Offensive blast + mild flash |
+
+**Flashbangs (IDs 200–209)** — disorient via FLASH packets:
+
+| ID  | Name              | Price | Fuse | Radius | Damage | Flash | Duration |
+| --- | ----------------- | ----- | ---- | ------ | ------ | ----- | -------- |
+| 200 | **M84 Flashbang** | 150   | 1.5s | 10 m   | 6      | 1.00  | 5.0s     |
+| 201 | GBG-001           | 130   | 1.5s | 9 m    | 5      | 0.95  | 4.5s     |
+| 202 | BTG-S             | 110   | 1.5s | 8.5 m  | 5      | 0.90  | 4.0s     |
+| 203 | AB-EI             | 90    | 1.6s | 8 m    | 4      | 0.80  | 3.5s     |
+| 204 | Stingball         | 180   | 1.5s | 10 m   | 18     | 0.70  | 2.5s     |
+| 205 | B&T Diversionary  | 200   | 1.4s | 11 m   | 7      | 1.00  | 6.0s     |
+| 206 | MK141 Mod 0       | 220   | 1.5s | 12 m   | 6      | 1.00  | 6.5s     |
+| 207 | NICO 9-Banger     | 250   | 1.6s | 14 m   | 9      | 1.00  | 8.0s     |
+| 208 | ALS Distraction   | 80    | 1.7s | 7 m    | 3      | 0.55  | 2.0s     |
+| 209 | FlashShield Pro   | 180   | 1.5s | 20 m   | 4      | 0.85  | 5.0s     |
+
+**Bombs / demolition (IDs 300–309)** — varied fuse types, big damage:
+
+| ID  | Name                | Price | Fuse | Radius | Damage | Notes |
+| --- | ------------------- | ----- | ---- | ------ | ------ | ----- |
+| 300 | **C4 Block**        | 3000  | 40s  | 18 m   | 800    | Plant-and-defuse, 40s timer |
+| 301 | Semtex 1H           | 1200  | 4.0s | 10 m   | 400    | Czech plastic explosive |
+| 302 | TNT Charge          | 700   | 5.0s | 8 m    | 300    | 1 kg TNT block |
+| 303 | **Claymore M18**    | 1800  | prox | 6 m    | 1200   | **Directional** — 60° forward cone, proximity-triggered |
+| 304 | Satchel Charge M37  | 1500  | 6.0s | 12 m   | 600    | M37 demolition satchel |
+| 305 | IED 5kg             | 500   | 3.0s | 10 m   | 500    | Improvised 5 kg |
+| 306 | IED 10kg            | 900   | 3.5s | 14 m   | 800    | Improvised 10 kg |
+| 307 | Sticky Bomb         | 1400  | contact | 7 m | 500    | Sticks to first contact + 3s fuse |
+| 308 | Det-Cord Roll       | 600   | 2.5s | 3 m    | 300    | Narrow but intense linear charge |
+| 309 | Demo Pack 25kg      | 2500  | 8.0s | 25 m   | 2000   | Shaped pack — area denial |
+
+### Ballistics
+
+Bullets are simulated as actual projectiles, not instant rays. Each shot spawns a `Projectile` on the server with the weapon's caliber-specific muzzle velocity, mass, drag coefficient, cross-section area, and aim direction. Each tick (30 Hz, sub-stepped for fast bullets):
+
+- **Newton drag**: `F_drag = ½ ρ_air · v² · C_d · A` against the velocity vector (`ρ_air ≈ 1.225 kg/m³`).
+- **Gravity**: 9.81 m/s² downward (yes, your sniper shot drops over long distance).
+- **Hit damage scales by velocity²**: a bullet that's lost half its speed deals 25 % of its muzzle damage.
+- **Anti-tunneling**: per-tick step is sub-divided when `v · dt > 0.3 m` so a 940 m/s rifle doesn't skip through a target between frames.
+
+Server broadcasts a `TRACER` UDP packet on spawn and an `IMPACT` on stop (with surface kind: 0=wall, 1=body, 2=head, 3=ground, 4=ricochet). Clients render a coloured streak following the projectile and an impact particle at the landing point.
+
+Cap: 200 in-flight projectiles per match (anyone repeatedly hitting that cap gets auto-disconnected).
 
 ## Teams & chat
 
@@ -165,6 +265,9 @@ Chat is **live and server-relayed**: when one player posts, every other connecte
 | Mouse        | Look                         |
 | Left click   | Fire                         |
 | R            | Reload                       |
+| **G**        | Throw grenade (default M67)  |
+| **F**        | Throw flashbang (default M84)|
+| **B**        | Throw bomb (default C4)      |
 | ESC          | Leave match / back / quit    |
 | TAB          | Switch chat tab / leaderboard tab |
 | ENTER        | Send chat / dismiss results  |
