@@ -182,7 +182,7 @@ void Game::sendInput(bool fire) {
 void Game::updateLocalCamera(float dt) {
     (void)dt;
     Vector2 md = GetMouseDelta();
-    yaw_   += md.x * 0.0025f;
+    yaw_   -= md.x * 0.0025f;
     pitch_ += md.y * 0.0025f;
     if (pitch_ > 1.4f) pitch_ = 1.4f;
     if (pitch_ < -1.4f) pitch_ = -1.4f;

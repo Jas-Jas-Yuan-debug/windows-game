@@ -149,12 +149,12 @@ void LocalMatch::updateSelf(float dt) {
         return;
     }
     Vector2 md = GetMouseDelta();
-    self_.yaw += md.x * kMouseSens;
+    self_.yaw -= md.x * kMouseSens;
     self_.pitch -= md.y * kMouseSens;
     if (self_.pitch > 1.45f) self_.pitch = 1.45f;
     if (self_.pitch < -1.45f) self_.pitch = -1.45f;
     float fx = std::sin(self_.yaw), fz = std::cos(self_.yaw);
-    float rx = std::cos(self_.yaw), rz = -std::sin(self_.yaw);
+    float rx = -std::cos(self_.yaw), rz = std::sin(self_.yaw);
     float mx = 0.0f, mz = 0.0f;
     if (IsKeyDown(KEY_W)) { mx += fx; mz += fz; }
     if (IsKeyDown(KEY_S)) { mx -= fx; mz -= fz; }

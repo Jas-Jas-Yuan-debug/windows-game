@@ -266,8 +266,8 @@ void Match::tick(float dt, std::vector<KillEvent>& killEvents) {
         if (len > 1.0f) { mx /= len; mz /= len; }
         float fwdX = -std::sin(s.yaw);
         float fwdZ = -std::cos(s.yaw);
-        float rgtX =  std::cos(s.yaw);
-        float rgtZ = -std::sin(s.yaw);
+        float rgtX = -std::cos(s.yaw);
+        float rgtZ =  std::sin(s.yaw);
         float vx = (fwdX * mz + rgtX * mx) * speed;
         float vz = (fwdZ * mz + rgtZ * mx) * speed;
         s.pos.x += vx * dt;
