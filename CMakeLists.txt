@@ -163,7 +163,10 @@ elseif(WIN32)
         winmm gdi32 opengl32 ws2_32 crypt32 bcrypt
     )
     if(MINGW)
-        target_link_options(claudegame PRIVATE -static-libgcc -static-libstdc++ -mwindows)
+        # -static pulls in libwinpthread statically too (otherwise the .exe
+        # depends on libwinpthread-1.dll which isn't installed on most Win11
+        # boxes). -mwindows hides the console window for the GUI client.
+        target_link_options(claudegame PRIVATE -static -static-libgcc -static-libstdc++ -mwindows)
     endif()
 endif()
 add_executable(claudegame_server ${CG_SERVER_SOURCES})
@@ -186,6 +189,7 @@ if(APPLE)
 elseif(WIN32)
     target_link_libraries(claudegame_server PRIVATE ws2_32 crypt32 bcrypt)
     if(MINGW)
-        target_link_options(claudegame_server PRIVATE -static-libgcc -static-libstdc++)
+        # -static pulls libwinpthread statically too — server is headless so no -mwindows.
+        target_link_options(claudegame_server PRIVATE -static -static-libgcc -static-libstdc++)
     endif()
 endif()
