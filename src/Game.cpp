@@ -1,6 +1,7 @@
 #include "Game.h"
 #include "Maps.h"
 #include "Protocol.h"
+#include "Throwable.h"
 #include "UiTheme.h"
 #include "Weapon.h"
 #include <raymath.h>
@@ -203,14 +204,85 @@ void Game::handleUdp(const std::vector<std::string>& m) {
         if (iv.victimUid != 0) hitMarkerTimer_ = 0.18f;
         else missMarkerTimer_ = 0.16f;
         if (impacts_.size() > 96) impacts_.erase(impacts_.begin(), impacts_.begin() + (impacts_.size() - 96));
+        // Spawn directional particles: red blood for body/head, yellow sparks for wall,
+        // tan dust for ground. ~8 per impact.
+        int n = 8;
+        Color pc = (iv.surfaceKind == 1 || iv.surfaceKind == 2) ? Color{ 200, 30, 30, 255 }
+                 : (iv.surfaceKind == 3)                         ? Color{ 190, 170, 130, 255 }
+                 :                                                 Color{ 255, 200, 80, 255 };
+        for (int k = 0; k < n; ++k) {
+            ParticleVisual pv;
+            pv.pos = iv.pos;
+            float th = (float)k / (float)n * 6.2832f;
+            float ph = ((float)(k * 7 % 9) - 4.0f) * 0.25f;
+            float sp = 2.5f + (k % 3) * 0.6f;
+            pv.vel = { std::cos(th)*sp, std::sin(ph)*sp + 1.5f, std::sin(th)*sp };
+            pv.color = pc;
+            pv.life = 0.35f + (k % 3) * 0.05f;
+            pv.size = (iv.surfaceKind == 2) ? 0.07f : 0.04f;  // bigger for headshot
+            particles_.push_back(pv);
+        }
+        if ((int)particles_.size() > 400) particles_.erase(particles_.begin(), particles_.begin() + (particles_.size() - 400));
     } else if (m[0] == proto::kU_Flash && m.size() >= 4) {
         int victimUid = std::atoi(m[1].c_str());
-        if (victimUid == net_.userId) damageVignetteTimer_ = std::max(damageVignetteTimer_, (float)std::atof(m[3].c_str()));
+        if (victimUid == net_.userId) {
+            float intensity = (float)std::atof(m[2].c_str());
+            float dur = (float)std::atof(m[3].c_str());
+            damageVignetteTimer_ = std::max(damageVignetteTimer_, dur);
+            // Burn the screen white. Decays inside updateEffects().
+            flashWhiteoutAlpha_ = std::max(flashWhiteoutAlpha_, std::min(1.0f, intensity));
+        }
+    } else if (m[0] == proto::kU_Explode && m.size() >= 3) {
+        int typeId = std::atoi(m[1].c_str());
+        Vector3 pos; parseVec3Csv(m[2], pos);
+        const Throwable* t = throwables::lookup(typeId);
+        if (t) {
+            ExplosionVisual e;
+            e.pos = pos;
+            e.radius = t->radiusM;
+            // Smoke grenades (very low damage) get a long-lived gray cloud instead of a fireball.
+            bool isSmoke = (t->kind == ThrowableKind::Grenade && t->maxDamage < 20.0f);
+            if (isSmoke) {
+                SmokeVisual s;
+                s.pos = pos; s.radius = t->radiusM; s.life = 6.0f;
+                smokes_.push_back(s);
+            } else {
+                e.life = (t->kind == ThrowableKind::Flashbang) ? 0.45f : 1.4f;
+                e.tint = (t->kind == ThrowableKind::Flashbang) ? Color{ 255, 255, 220, 255 }
+                       : (t->kind == ThrowableKind::Bomb)      ? Color{ 255, 110, 40, 255 }
+                       :                                         Color{ 255, 160, 60, 255 };
+                explosions_.push_back(e);
+                // Throw 18 sparks/debris radially.
+                for (int k = 0; k < 18; ++k) {
+                    ParticleVisual pv;
+                    pv.pos = pos;
+                    float th = (float)k / 18.0f * 6.2832f;
+                    float ph = ((float)(k * 37 % 11) - 5.0f) * 0.18f;
+                    float sp = 4.0f + (k % 5) * 0.6f;
+                    pv.vel = { std::cos(th)*sp, std::sin(ph)*sp + 2.5f, std::sin(th)*sp };
+                    pv.color = e.tint;
+                    pv.life = 0.7f + (k % 4) * 0.1f;
+                    pv.size = 0.06f;
+                    particles_.push_back(pv);
+                }
+            }
+        }
+        if ((int)explosions_.size() > 32) explosions_.erase(explosions_.begin(), explosions_.begin() + (explosions_.size() - 32));
+        if ((int)smokes_.size() > 16)     smokes_.erase(smokes_.begin(),         smokes_.begin()     + (smokes_.size()     - 16));
+        if ((int)particles_.size() > 400) particles_.erase(particles_.begin(),   particles_.begin() + (particles_.size()  - 400));
     }
 }
 void Game::sendInput(bool fire) {
     float mx = (IsKeyDown(KEY_D) ? 1.0f : 0.0f) - (IsKeyDown(KEY_A) ? 1.0f : 0.0f);
     float mz = (IsKeyDown(KEY_W) ? 1.0f : 0.0f) - (IsKeyDown(KEY_S) ? 1.0f : 0.0f);
+    if (fire) {
+        muzzleFlashTimer_ = 0.06f;
+        // Per-weapon recoil kick — scaled down to a small visual pitch jitter.
+        const Weapon* w = weapons::lookup(net_.selectedWeapon);
+        float kick = w ? w->recoilKick : 2.0f;
+        recoilKick_ += kick * 0.0035f;
+        if (recoilKick_ > 0.25f) recoilKick_ = 0.25f;
+    }
     net_.sendUdp({
         proto::kU_Input,
         net_.udpToken,
@@ -237,10 +309,13 @@ void Game::updateLocalCamera(float dt) {
         pos = camera_.position;
     }
     camera_.position = pos;
+    // Apply recoil kick as a momentary pitch-up (recoilKick_ added; decayed in updateEffects).
+    float effPitch = pitch_ - recoilKick_;
+    if (effPitch < -1.45f) effPitch = -1.45f;
     Vector3 fwd = {
-        std::cos(pitch_) * std::sin(yaw_),
-        -std::sin(pitch_),
-        std::cos(pitch_) * std::cos(yaw_)
+        std::cos(effPitch) * std::sin(yaw_),
+        -std::sin(effPitch),
+        std::cos(effPitch) * std::cos(yaw_)
     };
     camera_.target = Vector3Add(camera_.position, fwd);
     camera_.up = { 0.0f, 1.0f, 0.0f };
@@ -255,9 +330,28 @@ void Game::updateEffects(float dt) {
     for (auto& i : impacts_) i.age += dt;
     impacts_.erase(std::remove_if(impacts_.begin(), impacts_.end(),
                     [](const ImpactVisual& i) { return i.age >= i.life; }), impacts_.end());
+    // Particles (blood / sparks / dust / explosion debris): ballistic step + drag.
+    for (auto& p : particles_) {
+        p.age += dt;
+        p.vel.y -= 9.81f * dt;
+        p.vel.x *= (1.0f - 1.2f * dt);
+        p.vel.z *= (1.0f - 1.2f * dt);
+        p.pos = Vector3Add(p.pos, Vector3Scale(p.vel, dt));
+    }
+    particles_.erase(std::remove_if(particles_.begin(), particles_.end(),
+                    [](const ParticleVisual& p) { return p.age >= p.life || p.pos.y < -0.5f; }), particles_.end());
+    for (auto& e : explosions_) e.age += dt;
+    explosions_.erase(std::remove_if(explosions_.begin(), explosions_.end(),
+                    [](const ExplosionVisual& e) { return e.age >= e.life; }), explosions_.end());
+    for (auto& s : smokes_) s.age += dt;
+    smokes_.erase(std::remove_if(smokes_.begin(), smokes_.end(),
+                    [](const SmokeVisual& s) { return s.age >= s.life; }), smokes_.end());
     hitMarkerTimer_ = std::max(0.0f, hitMarkerTimer_ - dt);
     missMarkerTimer_ = std::max(0.0f, missMarkerTimer_ - dt);
     damageVignetteTimer_ = std::max(0.0f, damageVignetteTimer_ - dt);
+    muzzleFlashTimer_ = std::max(0.0f, muzzleFlashTimer_ - dt);
+    recoilKick_ = std::max(0.0f, recoilKick_ - dt * 1.2f);  // decay ~0.2s
+    flashWhiteoutAlpha_ = std::max(0.0f, flashWhiteoutAlpha_ - dt * 0.55f);
 }
 Game::PlayerEntry* Game::findSelfPlayer() {
     for (auto& p : players_) {
@@ -305,9 +399,74 @@ void Game::draw3D() {
                   (i.surfaceKind == 3 ? Color{ 190, 170, 130, 255 } : Color{ 255, 210, 80, 255 });
         DrawSphere(i.pos, 0.08f + i.age * 0.45f, Fade(c, a));
     }
-    Vector3 gunBase = Vector3Lerp(camera_.position, camera_.target, 0.45f);
-    DrawCube({ gunBase.x, gunBase.y - 0.28f, gunBase.z }, 0.12f, 0.12f, 0.65f, { 35, 37, 42, 255 });
-    DrawCube({ gunBase.x + 0.18f, gunBase.y - 0.38f, gunBase.z - 0.08f }, 0.10f, 0.24f, 0.16f, { 45, 47, 52, 255 });
+    // Particles (blood / sparks / dust / debris) — small cubes facing roughly the camera.
+    for (const auto& p : particles_) {
+        float a = 1.0f - (p.age / std::max(0.01f, p.life));
+        DrawCube(p.pos, p.size, p.size, p.size, Fade(p.color, a));
+    }
+    // Explosions — bright expanding sphere + dim outer shell.
+    for (const auto& e : explosions_) {
+        float t = e.age / std::max(0.01f, e.life);
+        float r = e.radius * (0.35f + t * 0.85f);
+        float a = (1.0f - t) * 0.65f;
+        DrawSphere(e.pos, r * 0.30f, Fade(e.tint, a));
+        DrawSphereWires(e.pos, r, 10, 12, Fade(e.tint, a * 0.45f));
+    }
+    // Smoke clouds — multiple stacked translucent spheres that drift up.
+    for (const auto& s : smokes_) {
+        float t = s.age / std::max(0.01f, s.life);
+        float baseA = (t < 0.15f) ? (t / 0.15f) * 0.55f : (1.0f - t) * 0.55f;
+        for (int k = 0; k < 5; ++k) {
+            Vector3 c = s.pos;
+            c.y += 0.4f + k * 0.5f + t * 1.2f;
+            c.x += std::sin(s.age * 0.7f + k) * 0.4f;
+            c.z += std::cos(s.age * 0.6f + k * 1.3f) * 0.4f;
+            float r = s.radius * (0.35f + k * 0.10f) * (0.5f + t * 0.6f);
+            DrawSphere(c, r, Fade(Color{ 110, 110, 115, 255 }, baseA));
+        }
+    }
+    // ---- First-person weapon viewmodel ----
+    // Per-weapon shape derived from caliber + price. Drawn slightly below + ahead of camera,
+    // following a damped right-hand offset so the gun "swings" naturally with look.
+    {
+        const Weapon* w = weapons::lookup(net_.selectedWeapon);
+        int caliber = w ? w->caliberMm : 9;
+        Vector3 fwd = Vector3Normalize(Vector3Subtract(camera_.target, camera_.position));
+        Vector3 right = Vector3Normalize(Vector3CrossProduct(fwd, camera_.up));
+        Vector3 down  = Vector3Negate(camera_.up);
+        Vector3 base  = Vector3Add(camera_.position, Vector3Scale(fwd, 0.55f));
+        base = Vector3Add(base, Vector3Scale(right, 0.18f));
+        base = Vector3Add(base, Vector3Scale(down, 0.30f));
+        Color metal = { 40, 42, 48, 255 };
+        Color stock = { 65, 50, 35, 255 };
+        Color mag   = { 28, 28, 32, 255 };
+        if (caliber >= 127) {            // 12.7 mm — very long with big scope + bipod
+            DrawCubeV(base, { 0.14f, 0.14f, 1.30f }, metal);
+            DrawCubeV(Vector3Add(base, Vector3Scale(fwd, 0.10f)), { 0.10f, 0.18f, 0.45f }, metal);
+            DrawSphere(Vector3Add(base, Vector3Add(Vector3Scale(camera_.up, 0.16f), Vector3Scale(fwd, 0.05f))), 0.07f, { 25, 25, 30, 255 });
+        } else if (caliber == 762) {     // 7.62 mm — AK-shape: receiver + curved mag
+            DrawCubeV(base, { 0.13f, 0.13f, 0.95f }, metal);
+            DrawCubeV(Vector3Add(base, Vector3Scale(camera_.up, -0.15f)), { 0.10f, 0.18f, 0.14f }, mag);
+            DrawCubeV(Vector3Add(base, Vector3Scale(fwd, -0.30f)), { 0.12f, 0.14f, 0.30f }, stock);
+        } else if (caliber == 556) {     // 5.56 mm — AR-15 / M4-ish
+            DrawCubeV(base, { 0.11f, 0.11f, 0.85f }, metal);
+            DrawCubeV(Vector3Add(base, Vector3Scale(camera_.up, -0.12f)), { 0.08f, 0.16f, 0.10f }, mag);
+            DrawCubeV(Vector3Add(base, Vector3Scale(fwd, -0.28f)), { 0.10f, 0.10f, 0.22f }, stock);
+        } else if (caliber == 12) {      // shotgun — wide, no mag, longer barrel
+            DrawCubeV(base, { 0.16f, 0.13f, 0.95f }, metal);
+            DrawCubeV(Vector3Add(base, Vector3Scale(fwd, -0.32f)), { 0.13f, 0.13f, 0.28f }, stock);
+        } else {                         // 9 mm — short pistol / SMG
+            DrawCubeV(base, { 0.10f, 0.10f, (caliber == 9 && net_.selectedWeapon >= 18) ? 0.55f : 0.30f }, metal);
+            DrawCubeV(Vector3Add(base, Vector3Scale(camera_.up, -0.10f)), { 0.08f, 0.14f, 0.10f }, mag);
+        }
+        // Muzzle flash — quick bright billboard at barrel tip.
+        if (muzzleFlashTimer_ > 0.0f) {
+            float fl = muzzleFlashTimer_ / 0.06f;
+            Vector3 tip = Vector3Add(base, Vector3Scale(fwd, 0.55f));
+            DrawSphere(tip, 0.10f + (1.0f - fl) * 0.05f, Fade(Color{ 255, 230, 110, 255 }, fl));
+            DrawSphere(tip, 0.20f + (1.0f - fl) * 0.10f, Fade(Color{ 255, 170,  40, 255 }, fl * 0.5f));
+        }
+    }
     EndMode3D();
 }
 void Game::drawHUD() {
@@ -394,6 +553,10 @@ void Game::drawHUD() {
     if (damageVignetteTimer_ > 0.0f) {
         float a = std::min(0.45f, damageVignetteTimer_ * 1.2f);
         DrawRectangle(0, 0, sw, sh, Fade(RED, a));
+    }
+    // Flashbang whiteout — drawn LAST so it covers everything.
+    if (flashWhiteoutAlpha_ > 0.0f) {
+        DrawRectangle(0, 0, sw, sh, Fade(WHITE, std::min(1.0f, flashWhiteoutAlpha_)));
     }
 }
 void Game::drawEndScreen() {

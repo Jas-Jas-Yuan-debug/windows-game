@@ -44,6 +44,27 @@ private:
         int surfaceKind = 0;
         int victimUid = 0;
     };
+    struct ParticleVisual {
+        Vector3 pos;
+        Vector3 vel;
+        Color   color = RAYWHITE;
+        float   age = 0.0f;
+        float   life = 0.5f;
+        float   size = 0.04f;
+    };
+    struct ExplosionVisual {
+        Vector3 pos;
+        float   age = 0.0f;
+        float   life = 1.2f;
+        float   radius = 8.0f;
+        Color   tint = ORANGE;
+    };
+    struct SmokeVisual {
+        Vector3 pos;
+        float   age = 0.0f;
+        float   life = 6.0f;
+        float   radius = 12.0f;
+    };
     NetClient& net_;
     std::string mapName_;
     static constexpr int kScreenW = 1280;
@@ -66,11 +87,17 @@ private:
     int blueScore_ = 0, redScore_ = 0;
     int timeLeftMs_ = 0;
     int selfWeaponId_ = 1;
-    std::vector<TracerVisual> tracers_;
-    std::vector<ImpactVisual> impacts_;
+    std::vector<TracerVisual>    tracers_;
+    std::vector<ImpactVisual>    impacts_;
+    std::vector<ParticleVisual>  particles_;
+    std::vector<ExplosionVisual> explosions_;
+    std::vector<SmokeVisual>     smokes_;
     float hitMarkerTimer_ = 0.0f;
     float missMarkerTimer_ = 0.0f;
     float damageVignetteTimer_ = 0.0f;
+    float muzzleFlashTimer_ = 0.0f;     // brief burst at gun muzzle on fire
+    float recoilKick_ = 0.0f;           // pitch offset (radians), decays toward 0
+    float flashWhiteoutAlpha_ = 0.0f;   // fullscreen white-out from flashbang
     int lastSelfHp_ = 100;
     std::vector<PlayerEntry> players_;
     Camera3D camera_{};
