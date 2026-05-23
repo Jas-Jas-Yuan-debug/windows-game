@@ -96,6 +96,21 @@ std::string makeUdpToken() {
     }
     return out;
 }
+std::string vec3Csv(const Vec3& v) {
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "%.2f,%.2f,%.2f", v.x, v.y, v.z);
+    return buf;
+}
+bool parseVec3Csv(const std::string& s, Vec3& out) {
+    size_t a = s.find(',');
+    if (a == std::string::npos) return false;
+    size_t b = s.find(',', a + 1);
+    if (b == std::string::npos) return false;
+    out.x = (float)std::atof(s.substr(0, a).c_str());
+    out.y = (float)std::atof(s.substr(a + 1, b - a - 1).c_str());
+    out.z = (float)std::atof(s.substr(b + 1).c_str());
+    return finiteFloat(out.x) && finiteFloat(out.y) && finiteFloat(out.z);
+}
 void setNonBlock(cg_socket_t fd) {
     cg_set_nonblock(fd);
 }
@@ -741,7 +756,66 @@ void Server::tickMatches() {
         Match& m = *kv.second;
         m.computeBotInputs(dt);
         std::vector<KillEvent> kills;
-        m.tick(dt, kills);
+        std::vector<TracerEvent> tracers;
+        std::vector<ImpactEvent> impacts;
+        std::vector<ExplodeEvent> explodes;
+        std::vector<FlashEvent> flashes;
+        m.tick(dt, kills, tracers, impacts, explodes, flashes);
+        for (const auto& tr : tracers) {
+            std::string line = proto::encodeLine({
+                proto::kU_Tracer,
+                std::to_string(tr.shooterUid),
+                vec3Csv(tr.origin),
+                vec3Csv(tr.velocity),
+                std::to_string(tr.colorId),
+                std::to_string(tr.projectileId),
+            });
+            for (const auto& s : m.slots()) {
+                if (!s.active || s.isBot) continue;
+                auto cit = clients_.find(s.clientId);
+                if (cit != clients_.end() && cit->second.udpKnown) sendUdpTo(cit->second.udpAddr, line);
+            }
+        }
+        for (const auto& im : impacts) {
+            std::string line = proto::encodeLine({
+                proto::kU_Impact,
+                std::to_string(im.projectileId),
+                vec3Csv(im.pos),
+                std::to_string(im.surfaceKind),
+                std::to_string(im.victimUid),
+            });
+            for (const auto& s : m.slots()) {
+                if (!s.active || s.isBot) continue;
+                auto cit = clients_.find(s.clientId);
+                if (cit != clients_.end() && cit->second.udpKnown) sendUdpTo(cit->second.udpAddr, line);
+            }
+        }
+        for (const auto& ex : explodes) {
+            std::string line = proto::encodeLine({
+                proto::kU_Explode,
+                std::to_string(ex.throwableTypeId),
+                vec3Csv(ex.pos),
+                std::to_string(ex.throwerUid),
+            });
+            for (const auto& s : m.slots()) {
+                if (!s.active || s.isBot) continue;
+                auto cit = clients_.find(s.clientId);
+                if (cit != clients_.end() && cit->second.udpKnown) sendUdpTo(cit->second.udpAddr, line);
+            }
+        }
+        for (const auto& fl : flashes) {
+            std::string line = proto::encodeLine({
+                proto::kU_Flash,
+                std::to_string(fl.victimUid),
+                std::to_string(fl.intensity),
+                std::to_string(fl.durationSec),
+            });
+            for (const auto& s : m.slots()) {
+                if (!s.active || s.isBot || s.userId != fl.victimUid) continue;
+                auto cit = clients_.find(s.clientId);
+                if (cit != clients_.end() && cit->second.udpKnown) sendUdpTo(cit->second.udpAddr, line);
+            }
+        }
         for (const auto& s : m.slots()) {
             if (!s.active) continue;
             if (s.isBot) continue;
@@ -972,6 +1046,23 @@ void Server::dispatchTcp(Client& c, const std::string& line) {
                 s.reloadTimer = w->reloadSec;
             }
             break;
+        }
+        return;
+    }
+    if (type == proto::kT_Throw) {
+        if (c.matchId < 0) return;
+        if (f.size() < 5) { sendToClient(c, proto::encodeLine({proto::kT_Err, "bad throw"})); return; }
+        auto it = matches_.find(c.matchId);
+        if (it == matches_.end()) return;
+        int typeId = std::atoi(f[1].c_str());
+        Vec3 origin, dir;
+        float power = (float)std::atof(f[4].c_str());
+        if (!parseVec3Csv(f[2], origin) || !parseVec3Csv(f[3], dir) || !finiteFloat(power)) {
+            sendToClient(c, proto::encodeLine({proto::kT_Err, "bad throw"}));
+            return;
+        }
+        if (!it->second->spawnThrowable(c.id, typeId, origin, dir, power)) {
+            sendToClient(c, proto::encodeLine({proto::kT_Err, "unknown throwable"}));
         }
         return;
     }

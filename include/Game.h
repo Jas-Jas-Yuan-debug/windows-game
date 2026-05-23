@@ -28,6 +28,22 @@ private:
         std::string name;
         std::string team;
     };
+    struct TracerVisual {
+        int projectileId = 0;
+        int shooterUid = 0;
+        Vector3 pos;
+        Vector3 vel;
+        float age = 0.0f;
+        float life = 0.18f;
+        Color color = RAYWHITE;
+    };
+    struct ImpactVisual {
+        Vector3 pos;
+        float age = 0.0f;
+        float life = 0.45f;
+        int surfaceKind = 0;
+        int victimUid = 0;
+    };
     NetClient& net_;
     std::string mapName_;
     static constexpr int kScreenW = 1280;
@@ -50,6 +66,12 @@ private:
     int blueScore_ = 0, redScore_ = 0;
     int timeLeftMs_ = 0;
     int selfWeaponId_ = 1;
+    std::vector<TracerVisual> tracers_;
+    std::vector<ImpactVisual> impacts_;
+    float hitMarkerTimer_ = 0.0f;
+    float missMarkerTimer_ = 0.0f;
+    float damageVignetteTimer_ = 0.0f;
+    int lastSelfHp_ = 100;
     std::vector<PlayerEntry> players_;
     Camera3D camera_{};
     double lastInputSent_ = 0.0;
@@ -72,6 +94,7 @@ private:
     void runEndLoop();
     void sendInput(bool fire);
     void updateLocalCamera(float dt);
+    void updateEffects(float dt);
     PlayerEntry* findSelfPlayer();
     void draw3D();
     void drawHUD();

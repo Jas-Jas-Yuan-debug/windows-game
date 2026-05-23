@@ -17,6 +17,24 @@ inline std::string toStr(int v) {
 inline std::string toStrF(float v) {
     char b[32]; std::snprintf(b, sizeof(b), "%.3f", v); return b;
 }
+bool parseVec3Csv(const std::string& s, Vector3& out) {
+    size_t a = s.find(',');
+    if (a == std::string::npos) return false;
+    size_t b = s.find(',', a + 1);
+    if (b == std::string::npos) return false;
+    out.x = (float)std::atof(s.substr(0, a).c_str());
+    out.y = (float)std::atof(s.substr(a + 1, b - a - 1).c_str());
+    out.z = (float)std::atof(s.substr(b + 1).c_str());
+    return true;
+}
+Color tracerColor(int id) {
+    switch (id) {
+        case 3: return { 255, 135,  40, 255 };
+        case 2: return { 255,  80,  65, 255 };
+        case 1: return { 255, 230,  90, 255 };
+        default: return { 220, 240, 255, 255 };
+    }
+}
 const char* weaponNameFor(int id) {
     const Weapon* w = weapons::lookup(id);
     if (w) return w->name;
@@ -63,6 +81,8 @@ void Game::applyStatePayload(const std::vector<std::string>& m) {
     redScore_     = std::atoi(m[10].c_str());
     timeLeftMs_   = std::atoi(m[11].c_str());
     selfWeaponId_ = std::atoi(m[12].c_str());
+    if (selfHp_ < lastSelfHp_) damageVignetteTimer_ = 0.35f;
+    lastSelfHp_ = selfHp_;
     int count     = std::atoi(m[13].c_str());
     if (count < 0) count = 0;
     if (count > proto::kMaxStatePlayers) count = proto::kMaxStatePlayers;
@@ -163,6 +183,29 @@ void Game::handleUdp(const std::vector<std::string>& m) {
     if (m.empty()) return;
     if (m[0] == proto::kU_State) {
         applyStatePayload(m);
+    } else if (m[0] == proto::kU_Tracer && m.size() >= 6) {
+        TracerVisual tv;
+        tv.shooterUid = std::atoi(m[1].c_str());
+        parseVec3Csv(m[2], tv.pos);
+        parseVec3Csv(m[3], tv.vel);
+        tv.color = tracerColor(std::atoi(m[4].c_str()));
+        tv.projectileId = std::atoi(m[5].c_str());
+        float speed = Vector3Length(tv.vel);
+        if (speed > 0.01f) tv.vel = Vector3Scale(tv.vel, 1.0f / speed);
+        tracers_.push_back(tv);
+        if (tracers_.size() > 96) tracers_.erase(tracers_.begin(), tracers_.begin() + (tracers_.size() - 96));
+    } else if (m[0] == proto::kU_Impact && m.size() >= 5) {
+        ImpactVisual iv;
+        parseVec3Csv(m[2], iv.pos);
+        iv.surfaceKind = std::atoi(m[3].c_str());
+        iv.victimUid = std::atoi(m[4].c_str());
+        impacts_.push_back(iv);
+        if (iv.victimUid != 0) hitMarkerTimer_ = 0.18f;
+        else missMarkerTimer_ = 0.16f;
+        if (impacts_.size() > 96) impacts_.erase(impacts_.begin(), impacts_.begin() + (impacts_.size() - 96));
+    } else if (m[0] == proto::kU_Flash && m.size() >= 4) {
+        int victimUid = std::atoi(m[1].c_str());
+        if (victimUid == net_.userId) damageVignetteTimer_ = std::max(damageVignetteTimer_, (float)std::atof(m[3].c_str()));
     }
 }
 void Game::sendInput(bool fire) {
@@ -202,6 +245,20 @@ void Game::updateLocalCamera(float dt) {
     camera_.target = Vector3Add(camera_.position, fwd);
     camera_.up = { 0.0f, 1.0f, 0.0f };
 }
+void Game::updateEffects(float dt) {
+    for (auto& t : tracers_) {
+        t.age += dt;
+        t.pos = Vector3Add(t.pos, Vector3Scale(t.vel, dt * 90.0f));
+    }
+    tracers_.erase(std::remove_if(tracers_.begin(), tracers_.end(),
+                    [](const TracerVisual& t) { return t.age >= t.life; }), tracers_.end());
+    for (auto& i : impacts_) i.age += dt;
+    impacts_.erase(std::remove_if(impacts_.begin(), impacts_.end(),
+                    [](const ImpactVisual& i) { return i.age >= i.life; }), impacts_.end());
+    hitMarkerTimer_ = std::max(0.0f, hitMarkerTimer_ - dt);
+    missMarkerTimer_ = std::max(0.0f, missMarkerTimer_ - dt);
+    damageVignetteTimer_ = std::max(0.0f, damageVignetteTimer_ - dt);
+}
 Game::PlayerEntry* Game::findSelfPlayer() {
     for (auto& p : players_) {
         if (p.uid == net_.userId) return &p;
@@ -219,8 +276,13 @@ void Game::draw3D() {
     DrawCube({ arenaHalfX_, wallH * 0.5f, 0.0f}, 0.5f, wallH, arenaHalfZ_ * 2.0f, wallColor);
     DrawCube({-arenaHalfX_, wallH * 0.5f, 0.0f}, 0.5f, wallH, arenaHalfZ_ * 2.0f, wallColor);
     for (const auto& o : obstacles_) {
-        DrawCube(o.center, o.size.x, o.size.y, o.size.z, BROWN);
+        Color cover = o.size.y > 2.5f ? Color{ 95, 88, 78, 255 } : Color{ 115, 95, 65, 255 };
+        DrawCube(o.center, o.size.x, o.size.y, o.size.z, cover);
         DrawCubeWires(o.center, o.size.x, o.size.y, o.size.z, BLACK);
+        if (o.size.y <= 1.3f) {
+            DrawCube({ o.center.x, o.center.y + o.size.y * 0.5f + 0.08f, o.center.z },
+                     o.size.x * 0.85f, 0.16f, o.size.z * 0.85f, { 75, 85, 65, 255 });
+        }
     }
     Color blueCol = { 40, 80, 200, 255 };
     Color redCol  = { 200, 50, 50, 255 };
@@ -232,6 +294,20 @@ void Game::draw3D() {
         DrawCube(cpos, 1.0f, 2.0f, 1.0f, c);
         DrawCubeWires(cpos, 1.0f, 2.0f, 1.0f, BLACK);
     }
+    for (const auto& t : tracers_) {
+        float a = 1.0f - (t.age / std::max(0.01f, t.life));
+        Vector3 tail = Vector3Subtract(t.pos, Vector3Scale(t.vel, 2.0f));
+        DrawCylinderEx(tail, t.pos, 0.025f, 0.01f, 8, Fade(t.color, a));
+    }
+    for (const auto& i : impacts_) {
+        float a = 1.0f - (i.age / std::max(0.01f, i.life));
+        Color c = i.victimUid != 0 ? Color{ 255, 45, 45, 255 } :
+                  (i.surfaceKind == 3 ? Color{ 190, 170, 130, 255 } : Color{ 255, 210, 80, 255 });
+        DrawSphere(i.pos, 0.08f + i.age * 0.45f, Fade(c, a));
+    }
+    Vector3 gunBase = Vector3Lerp(camera_.position, camera_.target, 0.45f);
+    DrawCube({ gunBase.x, gunBase.y - 0.28f, gunBase.z }, 0.12f, 0.12f, 0.65f, { 35, 37, 42, 255 });
+    DrawCube({ gunBase.x + 0.18f, gunBase.y - 0.38f, gunBase.z - 0.08f }, 0.10f, 0.24f, 0.16f, { 45, 47, 52, 255 });
     EndMode3D();
 }
 void Game::drawHUD() {
@@ -307,6 +383,18 @@ void Game::drawHUD() {
     int cx = sw / 2, cy = sh / 2;
     DrawLine(cx - 8, cy, cx + 8, cy, RAYWHITE);
     DrawLine(cx, cy - 8, cx, cy + 8, RAYWHITE);
+    if (hitMarkerTimer_ > 0.0f) {
+        DrawLine(cx - 18, cy - 18, cx - 8, cy - 8, RED);
+        DrawLine(cx + 18, cy - 18, cx + 8, cy - 8, RED);
+        DrawLine(cx - 18, cy + 18, cx - 8, cy + 8, RED);
+        DrawLine(cx + 18, cy + 18, cx + 8, cy + 8, RED);
+    } else if (missMarkerTimer_ > 0.0f) {
+        DrawCircleLines(cx, cy, 18.0f, Fade(LIGHTGRAY, 0.8f));
+    }
+    if (damageVignetteTimer_ > 0.0f) {
+        float a = std::min(0.45f, damageVignetteTimer_ * 1.2f);
+        DrawRectangle(0, 0, sw, sh, Fade(RED, a));
+    }
 }
 void Game::drawEndScreen() {
     int sw = kScreenW;
@@ -418,7 +506,19 @@ void Game::runMatchLoop() {
         if (IsKeyPressed(KEY_R)) {
             net_.sendTcp({ proto::kT_Reload });
         }
+        if (IsKeyPressed(KEY_G) || IsKeyPressed(KEY_F) || IsKeyPressed(KEY_B)) {
+            int typeId = IsKeyPressed(KEY_G) ? 100 : (IsKeyPressed(KEY_F) ? 200 : 300);
+            Vector3 fwd = Vector3Subtract(camera_.target, camera_.position);
+            float fl = Vector3Length(fwd);
+            if (fl > 0.01f) fwd = Vector3Scale(fwd, 1.0f / fl);
+            Vector3 origin = Vector3Add(camera_.position, Vector3Scale(fwd, 0.5f));
+            auto v3 = [](Vector3 v) {
+                char b[64]; std::snprintf(b, sizeof(b), "%.3f,%.3f,%.3f", v.x, v.y, v.z); return std::string(b);
+            };
+            net_.sendTcp({ proto::kT_Throw, std::to_string(typeId), v3(origin), v3(fwd), "18" });
+        }
         updateLocalCamera(dt);
+        updateEffects(dt);
         double now = GetTime();
         double interval = 1.0 / (double)std::max(1, net_.serverTickRate);
         if (now - lastInputSent_ >= interval) {

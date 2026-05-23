@@ -24,7 +24,7 @@ const char* weaponI18nKey(int id) {
         case 3: return "weapon.shotgun";
         case 4: return "weapon.rifle";
         case 5: return "weapon.sniper";
-        default: return "weapon.pistol";
+        default: return nullptr;
     }
 }
 bool drawLangButton(int x, int y, int w, int h) {
@@ -85,7 +85,10 @@ Menu::Result Menu::run() {
         std::string rank = i18n::tr(rankKeyForLevel(level));
         std::string team = net_.team;
         int credits = net_.credits;
-        const char* weaponName = i18n::tr(weaponI18nKey(net_.selectedWeapon));
+        const char* weaponKey = weaponI18nKey(net_.selectedWeapon);
+        const Weapon* selectedWeapon = weapons::lookup(net_.selectedWeapon);
+        const char* weaponName = weaponKey ? i18n::tr(weaponKey)
+                                           : (selectedWeapon ? selectedWeapon->name : "Pistol");
         BeginDrawing();
         ClearBackground({ 18, 22, 32, 255 });
         if (drawLangButton(800 - 90, 18, 72, 28)) {

@@ -11,7 +11,7 @@ constexpr int kWeaponSMG     = 2;
 constexpr int kWeaponShotgun = 3;
 constexpr int kWeaponRifle   = 4;
 constexpr int kWeaponSniper  = 5;
-constexpr int kWeaponCount   = 5;
+constexpr int kWeaponCount   = 19;  // IDs 1-5 = original, 6-19 added by weapon expansion (see Weapon.h)
 constexpr int kMaxStatePlayers = 32;
 constexpr const char* kT_Register     = "REGISTER";
 constexpr const char* kT_Login        = "LOGIN";
@@ -29,6 +29,9 @@ constexpr const char* kT_LeaderWin    = "LEADER_WIN";
 constexpr const char* kT_StoreList    = "STORE_LIST";
 constexpr const char* kT_StoreBuy     = "STORE_BUY";
 constexpr const char* kT_WeaponSelect = "WEAPON_SELECT";
+// Client → server (reliable TCP — losing a grenade-throw would be bad).
+// THROW|throwableTypeId|originX,Y,Z|dirX,Y,Z|powerMps
+constexpr const char* kT_Throw        = "THROW";
 constexpr const char* kT_Hello        = "HELLO";
 constexpr const char* kT_Err          = "ERR";
 constexpr const char* kT_Ok           = "OK";
@@ -52,6 +55,16 @@ constexpr const char* kT_Reconnected  = "RECONNECTED";
 constexpr const char* kU_Input        = "INPUT";
 constexpr const char* kU_State        = "STATE";
 constexpr const char* kU_Event        = "EVENT";
+// Server → client UDP broadcasts for ballistics / throwable effects.
+// TRACER|shooterUid|sx,sy,sz|vx,vy,vz|colorId|projectileId
+constexpr const char* kU_Tracer       = "TRACER";
+// IMPACT|projectileId|posX,Y,Z|surfaceKind|victimUid
+//   surfaceKind: 0=wall/cover, 1=player_body, 2=player_head, 3=ground, 4=ricochet
+constexpr const char* kU_Impact       = "IMPACT";
+// EXPLODE|throwableTypeId|posX,Y,Z|throwerUid
+constexpr const char* kU_Explode      = "EXPLODE";
+// FLASH|victimUid|intensity|durationSec  (sent only to affected players)
+constexpr const char* kU_Flash        = "FLASH";
 std::string urlEncode(const std::string& s);
 std::string urlDecode(const std::string& s);
 std::vector<std::string> splitDecode(const std::string& line);
