@@ -45,6 +45,11 @@ public:
     bool selectWeapon(int userId, int weaponId);
     int  buyWeapon(int userId, int weaponId);
     int  addCredits(int userId, int delta);
+    // DB-level ban: 0 = not banned; otherwise epoch-seconds until which login is rejected.
+    long long bannedUntil(int userId);
+    long long bannedUntilByName(const std::string& username);
+    // Set ban expiry. Pass nowSeconds + 86400 for 24h, or 0 to clear.
+    bool banUserUntil(int userId, long long epochSecondsUntil);
 private:
     sqlite3* db_ = nullptr;
     std::optional<User> currentUser_;

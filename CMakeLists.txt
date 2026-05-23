@@ -23,6 +23,21 @@ set(USE_STATIC_MBEDTLS_LIBRARY ON CACHE BOOL "" FORCE)
 set(USE_SHARED_MBEDTLS_LIBRARY OFF CACHE BOOL "" FORCE)
 set(MBEDTLS_FATAL_WARNINGS OFF CACHE BOOL "" FORCE)
 add_subdirectory(third_party/mbedtls EXCLUDE_FROM_ALL)
+# Argon2id reference implementation (MIT). Memory-hard password stretching for
+# server-side hashes. Pure C, ~3000 LOC, statically linked into both client
+# (for embedded server) and standalone server.
+file(GLOB CG_ARGON2_SRC
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/argon2/src/*.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/argon2/src/blake2/blake2b.c")
+add_library(argon2 STATIC ${CG_ARGON2_SRC})
+target_include_directories(argon2 PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/argon2/include)
+target_include_directories(argon2 PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/argon2/src)
+target_compile_definitions(argon2 PRIVATE ARGON2_NO_THREADS)
+if(NOT MSVC)
+    target_compile_options(argon2 PRIVATE -Wno-unused-function -Wno-unused-parameter -Wno-pedantic -Wno-sign-compare)
+endif()
 if(WIN32)
     set(_CG_BUNDLED_RAYLIB_ROOTS
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/raylib/raylib-5.5_win64_mingw-w64
@@ -135,7 +150,7 @@ target_include_directories(claudegame PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/server
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/mbedtls/include
 )
-target_link_libraries(claudegame PRIVATE mbedtls mbedx509 mbedcrypto)
+target_link_libraries(claudegame PRIVATE mbedtls mbedx509 mbedcrypto argon2)
 if(NOT CG_BUNDLED_SQLITE)
     target_link_libraries(claudegame PRIVATE sqlite3)
 else()
@@ -175,7 +190,7 @@ target_include_directories(claudegame_server PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/server
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/mbedtls/include
 )
-target_link_libraries(claudegame_server PRIVATE mbedtls mbedx509 mbedcrypto)
+target_link_libraries(claudegame_server PRIVATE mbedtls mbedx509 mbedcrypto argon2)
 if(NOT CG_BUNDLED_SQLITE)
     target_link_libraries(claudegame_server PRIVATE sqlite3)
 else()

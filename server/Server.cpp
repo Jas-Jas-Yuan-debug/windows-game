@@ -52,6 +52,8 @@ constexpr int kAimSnapKickThreshold        = 60;
 constexpr int kBadHmacKickThreshold        = 5;
 constexpr int kUdpFloodKickThreshold       = 5;
 constexpr int kBadInputKickThreshold       = 30;
+// DB-level ban on auto-kick: account locked out for 24 h.
+constexpr long long kAntiCheatBanSeconds   = 24 * 60 * 60;
 bool isLoopbackIp(unsigned int ipKey) {
     return (ipKey >> 24) == 127;
 }
@@ -606,7 +608,10 @@ void Server::readUdp() {
                 c->suspicionFlags |= kFlagBadHmac;
                 if (++c->badHmacCount >= kBadHmacKickThreshold) {
                     c->wantClose = true;
-                    std::cerr << "[antichea] auto-kick client=" << c->id
+                    if (c->loggedIn && c->userId > 0) {
+                        auth_.banUserUntil(c->userId, (long long)std::time(nullptr) + kAntiCheatBanSeconds);
+                    }
+                    std::cerr << "[antichea] auto-kick+ban client=" << c->id
                               << " user=" << c->username << " (bad HMAC ×"
                               << c->badHmacCount << ")" << std::endl;
                 }
@@ -623,7 +628,10 @@ void Server::readUdp() {
                 if (c->udpMsgCount == kMaxUdpMsgsPerSec + 1) {
                     if (++c->udpFloodCount >= kUdpFloodKickThreshold) {
                         c->wantClose = true;
-                        std::cerr << "[antichea] auto-kick client=" << c->id
+                        if (c->loggedIn && c->userId > 0) {
+                            auth_.banUserUntil(c->userId, (long long)std::time(nullptr) + kAntiCheatBanSeconds);
+                        }
+                        std::cerr << "[antichea] auto-kick+ban client=" << c->id
                                   << " user=" << c->username << " (UDP flood ×"
                                   << c->udpFloodCount << ")" << std::endl;
                     }
@@ -651,7 +659,10 @@ void Server::readUdp() {
                 c->suspicionFlags |= kFlagInputNonFinite;
                 if (++c->badInputCount >= kBadInputKickThreshold) {
                     c->wantClose = true;
-                    std::cerr << "[antichea] auto-kick client=" << c->id
+                    if (c->loggedIn && c->userId > 0) {
+                        auth_.banUserUntil(c->userId, (long long)std::time(nullptr) + kAntiCheatBanSeconds);
+                    }
+                    std::cerr << "[antichea] auto-kick+ban client=" << c->id
                               << " user=" << c->username << " (bad input ×"
                               << c->badInputCount << ")" << std::endl;
                 }
@@ -689,7 +700,10 @@ void Server::readUdp() {
                     }
                     if (c->aimSnapCount >= kAimSnapKickThreshold) {
                         c->wantClose = true;
-                        std::cerr << "[antichea] auto-kick client=" << c->id
+                        if (c->loggedIn && c->userId > 0) {
+                            auth_.banUserUntil(c->userId, (long long)std::time(nullptr) + kAntiCheatBanSeconds);
+                        }
+                        std::cerr << "[antichea] auto-kick+ban client=" << c->id
                                   << " user=" << c->username << " (aim-snap ×"
                                   << c->aimSnapCount << ")" << std::endl;
                     }
@@ -928,6 +942,16 @@ void Server::dispatchTcp(Client& c, const std::string& line) {
         auto& rec = loginAttempts_[key];
         if (rec.lockUntilMs > nowMs) {
             sendToClient(c, proto::encodeLine({proto::kT_Err, "too many attempts; try later"}));
+            return;
+        }
+        // DB-level ban check — independent of the in-memory failed-login throttle.
+        long long banUntil = auth_.bannedUntilByName(f[1]);
+        long long nowSec = (long long)std::time(nullptr);
+        if (banUntil > 0 && banUntil > nowSec) {
+            long long remaining = banUntil - nowSec;
+            char buf[96];
+            std::snprintf(buf, sizeof(buf), "account banned for %lld more seconds", remaining);
+            sendToClient(c, proto::encodeLine({proto::kT_Err, buf}));
             return;
         }
         User u;

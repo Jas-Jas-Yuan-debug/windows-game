@@ -1,6 +1,7 @@
 #include "AuthManager.h"
 #include "Crypto.h"
 #include "Weapon.h"
+#include <argon2.h>
 #include <sqlite3.h>
 #include <algorithm>
 #include <cctype>
@@ -110,7 +111,7 @@ void AuthManager::initSchema() {
         "    FOREIGN KEY (user_id) REFERENCES users(id)"
         ");";
     execSimple(db_, kSchema);
-    bool hasTeam = false, hasCredits = false, hasSelectedWeapon = false;
+    bool hasTeam = false, hasCredits = false, hasSelectedWeapon = false, hasBannedUntil = false;
     sqlite3_stmt* probe = nullptr;
     if (sqlite3_prepare_v2(db_, "PRAGMA table_info(users)", -1, &probe, nullptr) == SQLITE_OK) {
         while (sqlite3_step(probe) == SQLITE_ROW) {
@@ -120,6 +121,7 @@ void AuthManager::initSchema() {
             if (std::strcmp(name, "team") == 0) hasTeam = true;
             else if (std::strcmp(name, "credits") == 0) hasCredits = true;
             else if (std::strcmp(name, "selected_weapon") == 0) hasSelectedWeapon = true;
+            else if (std::strcmp(name, "banned_until") == 0) hasBannedUntil = true;
         }
         sqlite3_finalize(probe);
     }
@@ -131,6 +133,10 @@ void AuthManager::initSchema() {
     }
     if (!hasSelectedWeapon) {
         execSimple(db_, "ALTER TABLE users ADD COLUMN selected_weapon INTEGER NOT NULL DEFAULT 1");
+    }
+    if (!hasBannedUntil) {
+        // DB-level ban: epoch-seconds until which login is rejected. 0 = not banned.
+        execSimple(db_, "ALTER TABLE users ADD COLUMN banned_until INTEGER NOT NULL DEFAULT 0");
     }
     execSimple(db_,
         "INSERT OR IGNORE INTO user_weapons (user_id, weapon_id) "
@@ -288,6 +294,9 @@ bool AuthManager::registerUser(const std::string& username,
 bool AuthManager::login(const std::string& username, const std::string& password) {
     User u;
     if (!loadUserByName(username, u)) return false;
+    // Reject login if the account is still inside its ban window.
+    long long banUntil = bannedUntil(u.id);
+    if (banUntil > 0 && banUntil > nowEpoch()) return false;
     std::string candidate = hashPassword(u.salt, password);
     if (candidate.size() != u.passwordHash.size()) return false;
     unsigned char diff = 0;
@@ -807,15 +816,55 @@ int AuthManager::addCredits(int userId, int delta) {
 }
 std::string AuthManager::hashPassword(const std::string& saltHex,
                                       const std::string& password) {
-    constexpr std::uint32_t kPbkdf2Iters = 100000;
+    // v3.0.0: Argon2id (memory-hard, resists GPU/ASIC cracking).
+    // Parameters: t=3 passes, m=64 MiB memory, p=1 lane — OWASP 2024 minimum.
+    // Output is hex-encoded 32-byte digest; salt is the random per-user salt
+    // already in the users table. PBKDF2 is gone — legacy hashes won't validate
+    // and users must re-register. This is the documented v3.0.0 break.
+    constexpr std::uint32_t kArgon2Iters    = 3;
+    constexpr std::uint32_t kArgon2MemoryKB = 64 * 1024;   // 64 MiB
+    constexpr std::uint32_t kArgon2Lanes    = 1;
+    constexpr std::size_t   kHashLen        = 32;
     std::string saltBytes = hexToBytes(saltHex);
-    unsigned char digest[cg::kSha256Bytes];
-    if (!cg::pbkdf2Sha256(
-            reinterpret_cast<const unsigned char*>(password.data()), password.size(),
-            reinterpret_cast<const unsigned char*>(saltBytes.data()), saltBytes.size(),
-            kPbkdf2Iters,
-            digest, cg::kSha256Bytes)) {
-        throw std::runtime_error("pbkdf2Sha256 failed");
+    unsigned char digest[kHashLen];
+    int rc = argon2id_hash_raw(
+        kArgon2Iters,
+        kArgon2MemoryKB,
+        kArgon2Lanes,
+        password.data(), password.size(),
+        saltBytes.data(), saltBytes.size(),
+        digest, kHashLen);
+    if (rc != ARGON2_OK) {
+        throw std::runtime_error(std::string("argon2id_hash_raw failed: ") + argon2_error_message(rc));
     }
-    return bytesToHex(digest, cg::kSha256Bytes);
+    return bytesToHex(digest, kHashLen);
+}
+long long AuthManager::bannedUntil(int userId) {
+    if (!db_) return 0;
+    sqlite3_stmt* raw = nullptr;
+    if (sqlite3_prepare_v2(db_, "SELECT banned_until FROM users WHERE id = ?", -1, &raw, nullptr) != SQLITE_OK) return 0;
+    Stmt st(raw);
+    sqlite3_bind_int(st.s, 1, userId);
+    long long out = 0;
+    if (sqlite3_step(st.s) == SQLITE_ROW) out = sqlite3_column_int64(st.s, 0);
+    return out;
+}
+long long AuthManager::bannedUntilByName(const std::string& username) {
+    if (!db_) return 0;
+    sqlite3_stmt* raw = nullptr;
+    if (sqlite3_prepare_v2(db_, "SELECT banned_until FROM users WHERE username = ?", -1, &raw, nullptr) != SQLITE_OK) return 0;
+    Stmt st(raw);
+    sqlite3_bind_text(st.s, 1, username.c_str(), -1, SQLITE_TRANSIENT);
+    long long out = 0;
+    if (sqlite3_step(st.s) == SQLITE_ROW) out = sqlite3_column_int64(st.s, 0);
+    return out;
+}
+bool AuthManager::banUserUntil(int userId, long long epochSecondsUntil) {
+    if (!db_) return false;
+    sqlite3_stmt* raw = nullptr;
+    if (sqlite3_prepare_v2(db_, "UPDATE users SET banned_until = ? WHERE id = ?", -1, &raw, nullptr) != SQLITE_OK) return false;
+    Stmt st(raw);
+    sqlite3_bind_int64(st.s, 1, epochSecondsUntil);
+    sqlite3_bind_int(st.s, 2, userId);
+    return sqlite3_step(st.s) == SQLITE_DONE;
 }
